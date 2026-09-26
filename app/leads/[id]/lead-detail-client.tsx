@@ -25,6 +25,11 @@ import {
   ShieldCheck,
   Building2,
   X,
+  Trash2,
+  Edit2,
+  Undo2,
+  Lock,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface LeadDetailClientProps {
@@ -50,17 +55,26 @@ export function LeadDetailClient({
   const [meetings, setMeetings] = useState<Meeting[]>(initialMeetings);
   const [sales, setSales] = useState<Sale[]>(initialSales);
 
-  // Status update state
+  // Status update & confirmation state
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [pendingStatusChange, setPendingStatusChange] = useState<{ from: string; to: string } | null>(null);
+  const [undoToast, setUndoToast] = useState<{ previousStatus: string; newStatus: string } | null>(null);
+  const [undoTimer, setUndoTimer] = useState<NodeJS.Timeout | null>(null);
 
-  // Call Log form state
+  // Call Log form & edit/delete state
   const [showCallForm, setShowCallForm] = useState(false);
   const [callOutcome, setCallOutcome] = useState<'no_answer' | 'not_interested' | 'callback_requested' | 'meeting_booked' | 'sold'>('no_answer');
   const [callNotes, setCallNotes] = useState('');
   const [isSubmittingCall, setIsSubmittingCall] = useState(false);
+  const [editingCall, setEditingCall] = useState<Call | null>(null);
+  const [editCallOutcome, setEditCallOutcome] = useState<string>('no_answer');
+  const [editCallNotes, setEditCallNotes] = useState<string>('');
+  const [isUpdatingCall, setIsUpdatingCall] = useState(false);
+  const [deletingCall, setDeletingCall] = useState<Call | null>(null);
+  const [isDeletingCall, setIsDeletingCall] = useState(false);
 
-  // Meeting Schedule form state
+  // Meeting Schedule form & edit/delete state
   const [showMeetingForm, setShowMeetingForm] = useState(false);
   const [meetingDate, setMeetingDate] = useState('');
   const [meetingTime, setMeetingTime] = useState('');
@@ -68,17 +82,27 @@ export function LeadDetailClient({
   const [meetingLink, setMeetingLink] = useState('');
   const [isSubmittingMeeting, setIsSubmittingMeeting] = useState(false);
 
-  // Meeting Edit Modal state
+  // Meeting Edit Modal state (expanded)
   const [editingMeeting, setEditingMeeting] = useState<Meeting | null>(null);
+  const [editMeetingDate, setEditMeetingDate] = useState<string>('');
+  const [editMeetingTime, setEditMeetingTime] = useState<string>('');
+  const [editMeetingPlatform, setEditMeetingPlatform] = useState<'zoom' | 'google_meet'>('google_meet');
+  const [editMeetingLink, setEditMeetingLink] = useState<string>('');
   const [editMeetingStatus, setEditMeetingStatus] = useState<string>('scheduled');
   const [editMeetingNotes, setEditMeetingNotes] = useState<string>('');
   const [isUpdatingMeeting, setIsUpdatingMeeting] = useState(false);
+  const [deletingMeeting, setDeletingMeeting] = useState<Meeting | null>(null);
+  const [isDeletingMeeting, setIsDeletingMeeting] = useState(false);
 
-  // Sale form state
+  // Sale form & edit state
   const [showSaleForm, setShowSaleForm] = useState(false);
   const [saleAmount, setSaleAmount] = useState<string>('');
   const [paymentLink, setPaymentLink] = useState<string>('');
   const [isSubmittingSale, setIsSubmittingSale] = useState(false);
+  const [editingSale, setEditingSale] = useState<Sale | null>(null);
+  const [editSaleAmount, setEditSaleAmount] = useState<string>('');
+  const [editSalePaymentLink, setEditSalePaymentLink] = useState<string>('');
+  const [isUpdatingSale, setIsUpdatingSale] = useState(false);
 
   const showNotification = (text: string, type: 'success' | 'error' = 'success') => {
     setFeedbackMsg({ type, text });
@@ -172,10 +196,27 @@ export function LeadDetailClient({
     }
   };
 
-  // 1. Handle Status Change
-  const handleStatusChange = async (newStatus: string) => {
+  // 1. Status Change Workflow (Confirm -> Update -> Undo Toast)
+  const handleInitiateStatusChange = (newStatus: string) => {
+    if (newStatus === lead.status) return;
+    setPendingStatusChange({ from: lead.status, to: newStatus });
+  };
+
+  const triggerUndoToast = (oldStatus: string, newStatus: string) => {
+    if (undoTimer) clearTimeout(undoTimer);
+    setUndoToast({ previousStatus: oldStatus, newStatus });
+    const timer = setTimeout(() => {
+      setUndoToast(null);
+    }, 7000);
+    setUndoTimer(timer);
+  };
+
+  const handleConfirmStatusChange = async () => {
+    if (!pendingStatusChange) return;
+    const { from: oldStatus, to: newStatus } = pendingStatusChange;
+    setPendingStatusChange(null);
     setIsUpdatingStatus(true);
-    const previousStatus = lead.status;
+
     setLead((prev) => ({ ...prev, status: newStatus }));
 
     if (isSupabaseConfigured) {
@@ -187,20 +228,293 @@ export function LeadDetailClient({
           .eq('id', lead.id);
 
         if (error) {
-          setLead((prev) => ({ ...prev, status: previousStatus }));
+          setLead((prev) => ({ ...prev, status: oldStatus }));
           showNotification(`Failed to update status: ${error.message}`, 'error');
         } else {
-          showNotification(`Lead status updated to "${newStatus}"`);
+          triggerUndoToast(oldStatus, newStatus);
         }
       } catch (err: any) {
-        setLead((prev) => ({ ...prev, status: previousStatus }));
+        setLead((prev) => ({ ...prev, status: oldStatus }));
         showNotification(err?.message || 'Error updating status', 'error');
       }
     } else {
-      showNotification(`[Demo Mode] Status updated to "${newStatus}"`);
+      triggerUndoToast(oldStatus, newStatus);
     }
 
     setIsUpdatingStatus(false);
+  };
+
+  const handleUndoStatusChange = async () => {
+    if (!undoToast) return;
+    const { previousStatus, newStatus } = undoToast;
+    if (undoTimer) clearTimeout(undoTimer);
+    setUndoToast(null);
+
+    setLead((prev) => ({ ...prev, status: previousStatus }));
+
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+        const { error } = await supabase
+          .from('leads')
+          .update({ status: previousStatus, updated_at: new Date().toISOString() })
+          .eq('id', lead.id);
+
+        if (error) {
+          setLead((prev) => ({ ...prev, status: newStatus }));
+          showNotification(`Failed to revert status: ${error.message}`, 'error');
+        } else {
+          showNotification(`Status reverted back to "${previousStatus}"`);
+        }
+      } catch (err: any) {
+        setLead((prev) => ({ ...prev, status: newStatus }));
+        showNotification(err?.message || 'Error reverting status', 'error');
+      }
+    } else {
+      showNotification(`[Demo Mode] Status reverted back to "${previousStatus}"`);
+    }
+  };
+
+  // Call Log Edit & Delete Handlers
+  const openEditCall = (call: Call) => {
+    setEditingCall(call);
+    setEditCallOutcome((call.outcome || 'no_answer') as any);
+    setEditCallNotes(call.notes || '');
+  };
+
+  const handleSaveEditCall = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCall) return;
+    setIsUpdatingCall(true);
+
+    const updatedPayload = {
+      outcome: editCallOutcome,
+      notes: editCallNotes.trim() || null,
+    };
+
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+        const { error } = await supabase
+          .from('calls')
+          .update(updatedPayload)
+          .eq('id', editingCall.id)
+          .eq('freelancer_id', freelancerId);
+
+        if (error) {
+          showNotification(`Failed to update call: ${error.message}`, 'error');
+        } else {
+          setCalls((prev) =>
+            prev.map((c) => (c.id === editingCall.id ? { ...c, ...updatedPayload } : c))
+          );
+          setEditingCall(null);
+          showNotification('Call log updated successfully');
+        }
+      } catch (err: any) {
+        showNotification(err?.message || 'Error updating call', 'error');
+      }
+    } else {
+      setCalls((prev) =>
+        prev.map((c) => (c.id === editingCall.id ? { ...c, ...updatedPayload } : c))
+      );
+      setEditingCall(null);
+      showNotification('[Demo Mode] Call log updated successfully');
+    }
+
+    setIsUpdatingCall(false);
+  };
+
+  const handleConfirmDeleteCall = async () => {
+    if (!deletingCall) return;
+    setIsDeletingCall(true);
+
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+        const { error } = await supabase
+          .from('calls')
+          .delete()
+          .eq('id', deletingCall.id)
+          .eq('freelancer_id', freelancerId);
+
+        if (error) {
+          showNotification(`Failed to delete call: ${error.message}`, 'error');
+        } else {
+          setCalls((prev) => prev.filter((c) => c.id !== deletingCall.id));
+          setDeletingCall(null);
+          showNotification('Call log deleted');
+        }
+      } catch (err: any) {
+        showNotification(err?.message || 'Error deleting call', 'error');
+      }
+    } else {
+      setCalls((prev) => prev.filter((c) => c.id !== deletingCall.id));
+      setDeletingCall(null);
+      showNotification('[Demo Mode] Call log deleted');
+    }
+
+    setIsDeletingCall(false);
+  };
+
+  // Meeting Edit & Delete Handlers
+  const openEditMeeting = (m: Meeting) => {
+    setEditingMeeting(m);
+    if (m.meeting_datetime) {
+      const d = new Date(m.meeting_datetime);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const hours = String(d.getHours()).padStart(2, '0');
+      const minutes = String(d.getMinutes()).padStart(2, '0');
+      setEditMeetingDate(`${year}-${month}-${day}`);
+      setEditMeetingTime(`${hours}:${minutes}`);
+    } else {
+      setEditMeetingDate('');
+      setEditMeetingTime('');
+    }
+    setEditMeetingPlatform((m.platform === 'zoom' ? 'zoom' : 'google_meet') as any);
+    setEditMeetingLink(m.meeting_link || '');
+    setEditMeetingStatus(m.status || 'scheduled');
+    setEditMeetingNotes(m.outcome_notes || '');
+  };
+
+  const handleSaveEditMeeting = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingMeeting) return;
+    setIsUpdatingMeeting(true);
+
+    let meetingDatetime = editingMeeting.meeting_datetime;
+    if (editMeetingDate && editMeetingTime) {
+      const combined = new Date(`${editMeetingDate}T${editMeetingTime}`);
+      meetingDatetime = combined.toISOString();
+    }
+
+    const updatedPayload = {
+      meeting_datetime: meetingDatetime,
+      platform: editMeetingPlatform,
+      meeting_link: editMeetingLink.trim() || null,
+      status: editMeetingStatus,
+      outcome_notes: editMeetingNotes.trim() || null,
+    };
+
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+        const { error } = await supabase
+          .from('meetings')
+          .update(updatedPayload)
+          .eq('id', editingMeeting.id)
+          .eq('freelancer_id', freelancerId);
+
+        if (error) {
+          showNotification(`Failed to update meeting: ${error.message}`, 'error');
+        } else {
+          setMeetings((prev) =>
+            prev.map((m) => (m.id === editingMeeting.id ? { ...m, ...updatedPayload } : m))
+          );
+          setEditingMeeting(null);
+          showNotification('Meeting updated successfully');
+        }
+      } catch (err: any) {
+        showNotification(err?.message || 'Error updating meeting', 'error');
+      }
+    } else {
+      setMeetings((prev) =>
+        prev.map((m) => (m.id === editingMeeting.id ? { ...m, ...updatedPayload } : m))
+      );
+      setEditingMeeting(null);
+      showNotification('[Demo Mode] Meeting updated successfully');
+    }
+
+    setIsUpdatingMeeting(false);
+  };
+
+  const handleConfirmDeleteMeeting = async () => {
+    if (!deletingMeeting) return;
+    setIsDeletingMeeting(true);
+
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+        const { error } = await supabase
+          .from('meetings')
+          .delete()
+          .eq('id', deletingMeeting.id)
+          .eq('freelancer_id', freelancerId);
+
+        if (error) {
+          showNotification(`Failed to delete meeting: ${error.message}`, 'error');
+        } else {
+          setMeetings((prev) => prev.filter((m) => m.id !== deletingMeeting.id));
+          setDeletingMeeting(null);
+          showNotification('Meeting deleted');
+        }
+      } catch (err: any) {
+        showNotification(err?.message || 'Error deleting meeting', 'error');
+      }
+    } else {
+      setMeetings((prev) => prev.filter((m) => m.id !== deletingMeeting.id));
+      setDeletingMeeting(null);
+      showNotification('[Demo Mode] Meeting deleted');
+    }
+
+    setIsDeletingMeeting(false);
+  };
+
+  // Sale Edit Handlers
+  const openEditSale = (sale: Sale) => {
+    setEditingSale(sale);
+    setEditSaleAmount(String(sale.sale_amount || ''));
+    setEditSalePaymentLink(sale.payment_link || '');
+  };
+
+  const handleSaveEditSale = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSale) return;
+    setIsUpdatingSale(true);
+
+    const amountNumber = parseFloat(editSaleAmount);
+    if (isNaN(amountNumber) || amountNumber <= 0) {
+      showNotification('Please enter a valid positive sale amount', 'error');
+      setIsUpdatingSale(false);
+      return;
+    }
+
+    const updatedPayload = {
+      sale_amount: amountNumber,
+      payment_link: editSalePaymentLink.trim() || null,
+    };
+
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+        const { error } = await supabase
+          .from('sales')
+          .update(updatedPayload)
+          .eq('id', editingSale.id)
+          .eq('freelancer_id', freelancerId);
+
+        if (error) {
+          showNotification(`Failed to update sale: ${error.message}`, 'error');
+        } else {
+          setSales((prev) =>
+            prev.map((s) => (s.id === editingSale.id ? { ...s, ...updatedPayload } : s))
+          );
+          setEditingSale(null);
+          showNotification('Sale record updated successfully');
+        }
+      } catch (err: any) {
+        showNotification(err?.message || 'Error updating sale', 'error');
+      }
+    } else {
+      setSales((prev) =>
+        prev.map((s) => (s.id === editingSale.id ? { ...s, ...updatedPayload } : s))
+      );
+      setEditingSale(null);
+      showNotification('[Demo Mode] Sale record updated successfully');
+    }
+
+    setIsUpdatingSale(false);
   };
 
   // 2. Handle Log a Call
@@ -316,54 +630,7 @@ export function LeadDetailClient({
     setIsSubmittingMeeting(false);
   };
 
-  // 4. Handle Update Meeting (Status & Outcome Notes)
-  const handleSaveMeetingUpdate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingMeeting) return;
 
-    setIsUpdatingMeeting(true);
-
-    if (isSupabaseConfigured) {
-      try {
-        const supabase = createClient();
-        const { error } = await supabase
-          .from('meetings')
-          .update({
-            status: editMeetingStatus,
-            outcome_notes: editMeetingNotes.trim() || null,
-          })
-          .eq('id', editingMeeting.id);
-
-        if (error) {
-          showNotification(`Failed to update meeting: ${error.message}`, 'error');
-        } else {
-          setMeetings((prev) =>
-            prev.map((m) =>
-              m.id === editingMeeting.id
-                ? { ...m, status: editMeetingStatus, outcome_notes: editMeetingNotes.trim() || null }
-                : m
-            )
-          );
-          setEditingMeeting(null);
-          showNotification('Meeting updated successfully');
-        }
-      } catch (err: any) {
-        showNotification(err?.message || 'Error updating meeting', 'error');
-      }
-    } else {
-      setMeetings((prev) =>
-        prev.map((m) =>
-          m.id === editingMeeting.id
-            ? { ...m, status: editMeetingStatus, outcome_notes: editMeetingNotes.trim() || null }
-            : m
-        )
-      );
-      setEditingMeeting(null);
-      showNotification('[Demo Mode] Meeting updated successfully');
-    }
-
-    setIsUpdatingMeeting(false);
-  };
 
   // 5. Handle Record Sale
   const handleRecordSale = async (e: React.FormEvent) => {
@@ -449,6 +716,31 @@ export function LeadDetailClient({
           </div>
         )}
 
+        {/* Floating Undo Toast for Status Changes */}
+        {undoToast && (
+          <div className="fixed bottom-6 right-6 z-50 p-4 rounded-xl shadow-2xl border border-zinc-700 bg-zinc-900 text-white flex items-center gap-4 text-xs sm:text-sm animate-in fade-in slide-in-from-bottom-4">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Status changed to <strong className="capitalize text-emerald-400 font-bold">{undoToast.newStatus}</strong></span>
+            </div>
+            <div className="flex items-center gap-2 pl-2 border-l border-zinc-700">
+              <button
+                onClick={handleUndoStatusChange}
+                className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center gap-1 transition"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+                <span>Undo</span>
+              </button>
+              <button
+                onClick={() => setUndoToast(null)}
+                className="text-zinc-400 hover:text-zinc-200 p-1"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Back Link */}
         <div className="flex items-center justify-between">
           <Link
@@ -489,7 +781,7 @@ export function LeadDetailClient({
                 <select
                   value={lead.status}
                   disabled={isUpdatingStatus}
-                  onChange={(e) => handleStatusChange(e.target.value)}
+                  onChange={(e) => handleInitiateStatusChange(e.target.value)}
                   className="pl-3 pr-8 py-1.5 text-xs font-medium bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer disabled:opacity-50"
                 >
                   <option value="new">Mark New</option>
@@ -679,16 +971,36 @@ export function LeadDetailClient({
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${badge.classes}`}>
                           {badge.label}
                         </span>
-                        <span className="text-xs text-zinc-400 flex items-center gap-1 font-mono">
-                          <Clock className="w-3 h-3" />
-                          {new Date(call.call_time).toLocaleString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-zinc-400 flex items-center gap-1 font-mono">
+                            <Clock className="w-3 h-3" />
+                            {new Date(call.call_time).toLocaleString(undefined, {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                          {call.freelancer_id === freelancerId && (
+                            <div className="flex items-center gap-1 border-l border-zinc-200 dark:border-zinc-700 pl-2">
+                              <button
+                                onClick={() => openEditCall(call)}
+                                className="p-1 rounded-md text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60 transition"
+                                title="Edit Call Log"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => setDeletingCall(call)}
+                                className="p-1 rounded-md text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60 transition"
+                                title="Delete Call Log"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       {call.notes ? (
                         <p className="text-xs sm:text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap leading-relaxed mt-1">
@@ -885,19 +1197,28 @@ export function LeadDetailClient({
                       )}
                     </div>
 
-                    {/* Button to update status & notes */}
+                    {/* Buttons to edit & delete meeting */}
                     <div className="shrink-0 flex items-center gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-zinc-100 dark:border-zinc-800">
-                      <button
-                        onClick={() => {
-                          setEditingMeeting(m);
-                          setEditMeetingStatus(m.status || 'scheduled');
-                          setEditMeetingNotes(m.outcome_notes || '');
-                        }}
-                        className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-zinc-800 dark:text-zinc-200 transition"
-                      >
-                        <Edit3 className="w-3.5 h-3.5 mr-1" />
-                        Update Meeting
-                      </button>
+                      {m.freelancer_id === freelancerId && (
+                        <>
+                          <button
+                            onClick={() => openEditMeeting(m)}
+                            className="inline-flex items-center px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-zinc-800 dark:text-zinc-200 transition"
+                            title="Edit Meeting"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 mr-1" />
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => setDeletingMeeting(m)}
+                            className="inline-flex items-center px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800 transition"
+                            title="Delete Meeting"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 mr-1" />
+                            Delete
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 );
@@ -1072,6 +1393,30 @@ export function LeadDetailClient({
                         </span>
                       </div>
                     </div>
+
+                    {/* Sale Edit Action / Lock Indicator */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-4 mt-4 border-t border-emerald-200/60 dark:border-emerald-800/40">
+                      <div className="text-xs">
+                        {sale.payment_status?.toLowerCase() === 'confirmed' ? (
+                          <span className="inline-flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-semibold bg-amber-50 dark:bg-amber-950/40 px-2.5 py-1 rounded-md border border-amber-200 dark:border-amber-800">
+                            <Lock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                            <span>Payment Confirmed by Admin (Editing locked)</span>
+                          </span>
+                        ) : (
+                          <span className="text-zinc-400 text-[11px]">Pending admin payment confirmation</span>
+                        )}
+                      </div>
+
+                      {sale.payment_status?.toLowerCase() !== 'confirmed' && sale.freelancer_id === freelancerId && (
+                        <button
+                          onClick={() => openEditSale(sale)}
+                          className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs"
+                        >
+                          <Edit2 className="w-3.5 h-3.5 mr-1.5" />
+                          Edit Sale
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1084,13 +1429,187 @@ export function LeadDetailClient({
           </div>
         )}
 
-        {/* Modal: Update Meeting Status & Outcome Notes */}
-        {editingMeeting && (
+        {/* MODAL 1: STATUS CHANGE CONFIRMATION */}
+        {pendingStatusChange && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-sm w-full p-6 shadow-xl border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-950/60 flex items-center justify-center text-blue-600 dark:text-blue-400 shrink-0">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
+                    Change Lead Status?
+                  </h3>
+                  <p className="text-xs text-zinc-500">
+                    Confirm your update for {lead.business_name}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mb-5 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700 text-xs text-zinc-700 dark:text-zinc-300">
+                Change status from{' '}
+                <span className="font-bold capitalize text-zinc-900 dark:text-zinc-100">
+                  {pendingStatusChange.from}
+                </span>{' '}
+                to{' '}
+                <span className="font-bold capitalize text-blue-600 dark:text-blue-400">
+                  {pendingStatusChange.to}
+                </span>
+                ? You will also have a brief chance to undo this change after confirming.
+              </div>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPendingStatusChange(null)}
+                  className="px-4 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmStatusChange}
+                  disabled={isUpdatingStatus}
+                  className="px-4 py-2 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition disabled:opacity-50"
+                >
+                  {isUpdatingStatus ? 'Updating...' : 'Confirm Change'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 2: EDIT CALL LOG */}
+        {editingCall && (
           <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
             <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-md w-full p-6 shadow-xl border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95">
               <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800 mb-4">
-                <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
-                  Update Meeting Status & Notes
+                <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                  <PhoneCall className="w-4 h-4 text-indigo-600" />
+                  <span>Edit Call Log</span>
+                </h3>
+                <button
+                  onClick={() => setEditingCall(null)}
+                  className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveEditCall} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1.5">
+                    Outcome
+                  </label>
+                  <select
+                    value={editCallOutcome}
+                    onChange={(e: any) => setEditCallOutcome(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 font-medium text-zinc-900 dark:text-zinc-100"
+                  >
+                    <option value="no_answer">No Answer</option>
+                    <option value="not_interested">Not Interested</option>
+                    <option value="callback_requested">Callback Requested</option>
+                    <option value="meeting_booked">Meeting Booked</option>
+                    <option value="sold">Sold</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1.5">
+                    Notes
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={editCallNotes}
+                    onChange={(e) => setEditCallNotes(e.target.value)}
+                    placeholder="Details about what was discussed, objections, next steps..."
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => setEditingCall(null)}
+                    className="px-4 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isUpdatingCall}
+                    className="px-4 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition disabled:opacity-50"
+                  >
+                    {isUpdatingCall ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 3: DELETE CALL CONFIRMATION */}
+        {deletingCall && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-sm w-full p-6 shadow-xl border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-full bg-rose-50 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400 shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
+                    Delete Call Log?
+                  </h3>
+                  <p className="text-xs text-zinc-500">
+                    This action cannot be undone.
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-zinc-600 dark:text-zinc-400 mb-5">
+                Are you sure you want to remove this call log recorded on{' '}
+                <strong>
+                  {new Date(deletingCall.call_time).toLocaleString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </strong>
+                ?
+              </p>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeletingCall(null)}
+                  disabled={isDeletingCall}
+                  className="px-4 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteCall}
+                  disabled={isDeletingCall}
+                  className="px-4 py-2 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white rounded-lg transition disabled:opacity-50"
+                >
+                  {isDeletingCall ? 'Deleting...' : 'Delete Call Log'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 4: EDIT MEETING (EXPANDED) */}
+        {editingMeeting && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-lg w-full p-6 shadow-xl border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95 my-8">
+              <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800 mb-4">
+                <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-purple-600" />
+                  <span>Edit Scheduled Meeting</span>
                 </h3>
                 <button
                   onClick={() => setEditingMeeting(null)}
@@ -1100,38 +1619,95 @@ export function LeadDetailClient({
                 </button>
               </div>
 
-              <form onSubmit={handleSaveMeetingUpdate} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1.5">
-                    Meeting Status
-                  </label>
-                  <select
-                    value={editMeetingStatus}
-                    onChange={(e) => setEditMeetingStatus(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg font-medium"
-                  >
-                    <option value="scheduled">Scheduled</option>
-                    <option value="completed">Completed</option>
-                    <option value="no_show">No Show</option>
-                    <option value="rescheduled">Rescheduled</option>
-                    <option value="cancelled">Cancelled</option>
-                  </select>
+              <form onSubmit={handleSaveEditMeeting} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1">
+                      Date
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={editMeetingDate}
+                      onChange={(e) => setEditMeetingDate(e.target.value)}
+                      className="w-full px-3 py-2 text-xs rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1">
+                      Time
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={editMeetingTime}
+                      onChange={(e) => setEditMeetingTime(e.target.value)}
+                      className="w-full px-3 py-2 text-xs rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1">
+                      Platform
+                    </label>
+                    <select
+                      value={editMeetingPlatform}
+                      onChange={(e: any) => setEditMeetingPlatform(e.target.value)}
+                      className="w-full px-3 py-2 text-xs rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 font-medium text-zinc-900 dark:text-zinc-100"
+                    >
+                      <option value="google_meet">Google Meet</option>
+                      <option value="zoom">Zoom</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1">
+                      Status
+                    </label>
+                    <select
+                      value={editMeetingStatus}
+                      onChange={(e) => setEditMeetingStatus(e.target.value)}
+                      className="w-full px-3 py-2 text-xs rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 font-medium text-zinc-900 dark:text-zinc-100"
+                    >
+                      <option value="scheduled">Scheduled</option>
+                      <option value="completed">Completed</option>
+                      <option value="no_show">No Show</option>
+                      <option value="rescheduled">Rescheduled</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1.5">
-                    Outcome Notes
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1">
+                    Meeting Link (Optional)
                   </label>
-                  <textarea
-                    rows={4}
-                    value={editMeetingNotes}
-                    onChange={(e) => setEditMeetingNotes(e.target.value)}
-                    placeholder="Summary of meeting discussion, client questions, agreements, etc."
-                    className="w-full px-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  <input
+                    type="url"
+                    value={editMeetingLink}
+                    onChange={(e) => setEditMeetingLink(e.target.value)}
+                    placeholder="https://meet.google.com/..."
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100"
                   />
                 </div>
 
-                <div className="flex items-center justify-end gap-2 pt-2">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1">
+                    Outcome Notes
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={editMeetingNotes}
+                    onChange={(e) => setEditMeetingNotes(e.target.value)}
+                    placeholder="Summary of meeting discussion, client questions, agreements, etc."
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-purple-500 text-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
                   <button
                     type="button"
                     onClick={() => setEditingMeeting(null)}
@@ -1144,7 +1720,126 @@ export function LeadDetailClient({
                     disabled={isUpdatingMeeting}
                     className="px-4 py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition disabled:opacity-50"
                   >
-                    {isUpdatingMeeting ? 'Saving...' : 'Save Changes'}
+                    {isUpdatingMeeting ? 'Saving...' : 'Save Meeting Changes'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 5: DELETE MEETING CONFIRMATION */}
+        {deletingMeeting && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-sm w-full p-6 shadow-xl border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-full bg-rose-50 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400 shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
+                    Delete Meeting?
+                  </h3>
+                  <p className="text-xs text-zinc-500">
+                    Remove scheduled appointment
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-zinc-600 dark:text-zinc-400 mb-5">
+                Are you sure you want to delete this scheduled meeting? It will be permanently removed from your calendar and meeting logs.
+              </p>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeletingMeeting(null)}
+                  disabled={isDeletingMeeting}
+                  className="px-4 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteMeeting}
+                  disabled={isDeletingMeeting}
+                  className="px-4 py-2 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white rounded-lg transition disabled:opacity-50"
+                >
+                  {isDeletingMeeting ? 'Deleting...' : 'Delete Meeting'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 6: EDIT SALE */}
+        {editingSale && (
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-md w-full p-6 shadow-xl border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95">
+              <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800 mb-4">
+                <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                  <DollarSign className="w-4 h-4 text-emerald-600" />
+                  <span>Edit Sale Record</span>
+                </h3>
+                <button
+                  onClick={() => setEditingSale(null)}
+                  className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveEditSale} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1">
+                    Sale Amount ($ USD) *
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-bold">$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="1"
+                      required
+                      placeholder="0.00"
+                      value={editSaleAmount}
+                      onChange={(e) => setEditSaleAmount(e.target.value)}
+                      className="w-full pl-7 pr-3 py-2 text-sm font-bold bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg text-zinc-900 dark:text-zinc-100"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1">
+                    Payment Link / Invoice URL (Optional)
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://buy.stripe.com/..."
+                    value={editSalePaymentLink}
+                    onChange={(e) => setEditSalePaymentLink(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg text-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
+
+                <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-[11px] text-emerald-800 dark:text-emerald-300">
+                  Note: You can update the amount and payment link as long as the payment status is pending. Once verified and confirmed by an admin, editing will be locked.
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => setEditingSale(null)}
+                    className="px-4 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isUpdatingSale}
+                    className="px-4 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:opacity-50"
+                  >
+                    {isUpdatingSale ? 'Saving...' : 'Save Sale Changes'}
                   </button>
                 </div>
               </form>
