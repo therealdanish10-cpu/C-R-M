@@ -7,8 +7,10 @@ import {
   Users,
   UserPlus,
   Edit2,
+  Trash2,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   X,
   Globe,
   Clock,
@@ -46,6 +48,12 @@ export function AdminFreelancersClient({
   const [editRate, setEditRate] = useState<string>('15');
   const [editStatus, setEditStatus] = useState<string>('active');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  // Delete Freelancer Confirmation
+  const [deletingFreelancer, setDeletingFreelancer] = useState<Freelancer | null>(null);
+  const [isDeletingConfirm, setIsDeletingConfirm] = useState(false);
+  const [deleteStep, setDeleteStep] = useState<'confirm' | 'success'>('confirm');
+  const [deletedAuthHint, setDeletedAuthHint] = useState<string>('');
 
   // Toast
   const [toast, setToast] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -173,6 +181,68 @@ export function AdminFreelancersClient({
     }
 
     setIsSavingEdit(false);
+  };
+
+  // Delete freelancer handler:
+  // Step 1 — nullify leads.assigned_to for this freelancer
+  // Step 2 — delete the freelancers row
+  const handleDeleteFreelancer = async () => {
+    if (!deletingFreelancer) return;
+    setIsDeletingConfirm(true);
+
+    const fl = deletingFreelancer;
+
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+
+        // Step 1: Unassign all leads belonging to this freelancer
+        const { error: unassignError } = await supabase
+          .from('leads')
+          .update({ assigned_to: null })
+          .eq('assigned_to', fl.id);
+
+        if (unassignError) {
+          showToast(`Error unassigning leads: ${unassignError.message}`, 'error');
+          setIsDeletingConfirm(false);
+          return;
+        }
+
+        // Step 2: Delete the freelancer row
+        const { error: deleteError } = await supabase
+          .from('freelancers')
+          .delete()
+          .eq('id', fl.id);
+
+        if (deleteError) {
+          showToast(`Error deleting freelancer: ${deleteError.message}`, 'error');
+          setIsDeletingConfirm(false);
+          return;
+        }
+
+        // Remove from local state and show post-deletion notice
+        setFreelancers((prev) => prev.filter((f) => f.id !== fl.id));
+        setDeletedAuthHint(fl.email);
+        setDeleteStep('success');
+      } catch (err: any) {
+        showToast(err?.message || 'Failed to delete freelancer', 'error');
+        setIsDeletingConfirm(false);
+      }
+    } else {
+      // Demo Mode — simulate both steps
+      setFreelancers((prev) => prev.filter((f) => f.id !== fl.id));
+      setDeletedAuthHint(fl.email);
+      setDeleteStep('success');
+    }
+
+    setIsDeletingConfirm(false);
+  };
+
+  const closeDeletionModal = () => {
+    setDeletingFreelancer(null);
+    setDeleteStep('confirm');
+    setDeletedAuthHint('');
+    setIsDeletingConfirm(false);
   };
 
   return (
@@ -310,17 +380,29 @@ export function AdminFreelancersClient({
 
                     {/* Actions */}
                     <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => {
-                          setEditingFreelancer(fl);
-                          setEditRate(String(fl.commission_rate ?? 15));
-                          setEditStatus(fl.status || 'active');
-                        }}
-                        className="inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-md bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 transition"
-                      >
-                        <Edit2 className="w-3 h-3 mr-1" />
-                        Edit
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => {
+                            setEditingFreelancer(fl);
+                            setEditRate(String(fl.commission_rate ?? 15));
+                            setEditStatus(fl.status || 'active');
+                          }}
+                          className="inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-md bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 transition"
+                        >
+                          <Edit2 className="w-3 h-3 mr-1" />
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDeletingFreelancer(fl);
+                            setDeleteStep('confirm');
+                          }}
+                          className="inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-md bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800 transition"
+                        >
+                          <Trash2 className="w-3 h-3 mr-1" />
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -554,6 +636,138 @@ export function AdminFreelancersClient({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* MODAL: DELETE FREELANCER CONFIRMATION */}
+      {deletingFreelancer && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-md w-full p-6 shadow-2xl border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95">
+
+            {deleteStep === 'confirm' ? (
+              <>
+                {/* Warning Header */}
+                <div className="flex items-start gap-3 pb-4 border-b border-zinc-100 dark:border-zinc-800 mb-4">
+                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center">
+                    <AlertTriangle className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
+                      Delete {deletingFreelancer.name}?
+                    </h3>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      This action cannot be undone. Please read the warnings below.
+                    </p>
+                  </div>
+                  <button
+                    onClick={closeDeletionModal}
+                    className="ml-auto text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 shrink-0"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Consequence List */}
+                <div className="space-y-2.5 mb-5">
+                  <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider">
+                    What will happen:
+                  </p>
+
+                  <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3.5 space-y-2 text-xs text-amber-900 dark:text-amber-200">
+                    <div className="flex items-start gap-2">
+                      <span className="font-bold text-amber-600 mt-0.5">→</span>
+                      <span>
+                        <strong>Leads will be unassigned</strong> — any leads currently assigned to{' '}
+                        <strong>{deletingFreelancer.name}</strong> will have their{' '}
+                        <code className="font-mono text-[11px] bg-amber-100 dark:bg-amber-900 px-1 rounded">assigned_to</code>{' '}
+                        set to <code className="font-mono text-[11px] bg-amber-100 dark:bg-amber-900 px-1 rounded">null</code>. The leads themselves are NOT deleted.
+                      </span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="font-bold text-amber-600 mt-0.5">→</span>
+                      <span>
+                        <strong>Calls, meetings, and sales</strong> recorded by this freelancer will remain in the database — they will still show their{' '}
+                        <code className="font-mono text-[11px] bg-amber-100 dark:bg-amber-900 px-1 rounded">freelancer_id</code>{' '}
+                        but the freelancer record they reference will no longer exist.
+                      </span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="font-bold text-amber-600 mt-0.5">→</span>
+                      <span>
+                        <strong>Their Supabase Auth login is NOT deleted</strong> by this action. You must manually delete the corresponding user from the{' '}
+                        <strong>Supabase Dashboard → Authentication → Users</strong> to fully revoke their access.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Confirm / Cancel Buttons */}
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={closeDeletionModal}
+                    disabled={isDeletingConfirm}
+                    className="px-4 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteFreelancer}
+                    disabled={isDeletingConfirm}
+                    className="px-4 py-2 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white rounded-lg transition disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {isDeletingConfirm ? 'Deleting...' : 'Yes, Delete Freelancer'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* Post-deletion Auth Reminder */
+              <>
+                <div className="flex items-start gap-3 pb-4 border-b border-zinc-100 dark:border-zinc-800 mb-4">
+                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-950/60 flex items-center justify-center">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
+                      Freelancer Record Deleted
+                    </h3>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      Their leads have been unassigned. One important step remains.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 p-4 text-xs text-blue-900 dark:text-blue-200 space-y-2 mb-5">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    Action Required: Remove Supabase Auth User
+                  </p>
+                  <p>
+                    The freelancer&apos;s database record has been deleted and their leads are now unassigned.
+                    However, <strong>their Supabase login still exists</strong> and they can still authenticate until you remove it.
+                  </p>
+                  <p>To fully revoke access:</p>
+                  <ol className="list-decimal list-inside space-y-1 pl-1">
+                    <li>Go to your <strong>Supabase project dashboard</strong></li>
+                    <li>Navigate to <strong>Authentication → Users</strong></li>
+                    <li>Search for <code className="font-mono bg-blue-100 dark:bg-blue-900 px-1 rounded">{deletedAuthHint}</code></li>
+                    <li>Click on their user row and select <strong>Delete User</strong></li>
+                  </ol>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={closeDeletionModal}
+                    className="px-4 py-2 text-xs font-semibold bg-zinc-900 dark:bg-zinc-100 hover:bg-zinc-700 dark:hover:bg-zinc-200 text-white dark:text-zinc-900 rounded-lg transition"
+                  >
+                    Got it, close
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
