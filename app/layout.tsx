@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import Link from 'next/link';
 import Image from 'next/image';
-import { LayoutDashboard } from 'lucide-react';
+import { LayoutDashboard, Calendar } from 'lucide-react';
 
 export const metadata: Metadata = {
   title: 'Trelio CRM - Freelancer Cold-Calling',
@@ -47,13 +47,20 @@ export default function RootLayout({
               </div>
             </Link>
 
-            <nav className="flex items-center gap-4">
+            <nav className="flex items-center gap-2 sm:gap-3">
               <Link
                 href="/dashboard"
-                className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-blue-600 dark:text-blue-400 px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/60"
+                className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-zinc-700 dark:text-zinc-300 hover:text-blue-600 dark:hover:text-blue-400 px-2.5 sm:px-3 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
               >
                 <LayoutDashboard className="w-4 h-4" />
                 <span>Dashboard</span>
+              </Link>
+              <Link
+                href="/calendar"
+                className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-zinc-700 dark:text-zinc-300 hover:text-purple-600 dark:hover:text-purple-400 px-2.5 sm:px-3 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                <Calendar className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                <span>Calendar</span>
               </Link>
             </nav>
           </div>

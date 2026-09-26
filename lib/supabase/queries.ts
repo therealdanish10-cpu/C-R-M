@@ -1,5 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { Lead, DashboardStats, Freelancer } from './types';
+import { Lead, DashboardStats, Freelancer, MeetingWithLead } from './types';
 
 export async function getFreelancerProfile(supabase: SupabaseClient) {
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -115,3 +115,41 @@ export async function getFreelancerLeads(
     last_call_date: latestCallMap.get(lead.id) || null,
   }));
 }
+
+export async function getFreelancerMeetings(
+  supabase: SupabaseClient,
+  freelancerId: string
+): Promise<MeetingWithLead[]> {
+  const { data: meetings, error: meetingsError } = await supabase
+    .from('meetings')
+    .select('*')
+    .eq('freelancer_id', freelancerId)
+    .order('meeting_datetime', { ascending: true });
+
+  if (meetingsError || !meetings || meetings.length === 0) {
+    return [];
+  }
+
+  const leadIds = Array.from(new Set(meetings.map((m) => m.lead_id).filter(Boolean)));
+  if (leadIds.length === 0) {
+    return meetings.map((m) => ({ ...m, lead: null }));
+  }
+
+  const { data: leads } = await supabase
+    .from('leads')
+    .select('id, business_name, phone, category')
+    .in('id', leadIds);
+
+  const leadsMap = new Map<string, { id?: string; business_name: string; phone: string; category?: string }>();
+  if (leads) {
+    for (const lead of leads) {
+      leadsMap.set(lead.id, lead);
+    }
+  }
+
+  return meetings.map((m) => ({
+    ...m,
+    lead: leadsMap.get(m.lead_id) || null,
+  }));
+}
+

@@ -60,6 +60,15 @@ export type Meeting = {
   created_at: string;
 };
 
+export type MeetingWithLead = Meeting & {
+  lead?: {
+    id?: string;
+    business_name: string;
+    phone: string;
+    category?: string;
+  } | null;
+};
+
 export type Sale = {
   id: string;
   lead_id: string;
