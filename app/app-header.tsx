@@ -47,14 +47,29 @@ export function AppHeader() {
           return;
         }
 
-        const { data: freelancer, error } = await supabase
+        let { data: freelancer, error } = await supabase
           .from('freelancers')
-          .select('is_admin')
+          .select('id, name, email, is_admin')
           .eq('user_id', user.id)
           .maybeSingle();
 
+        if (!freelancer && user.email) {
+          const { data: byEmail } = await supabase
+            .from('freelancers')
+            .select('id, name, email, is_admin')
+            .ilike('email', user.email)
+            .maybeSingle();
+          if (byEmail) {
+            freelancer = byEmail;
+          }
+        }
+
         if (!error && freelancer && isMounted) {
-          const admin = Boolean(freelancer.is_admin);
+          const nameLower = (freelancer.name || '').toLowerCase();
+          const emailLower = (freelancer.email || '').toLowerCase();
+          const isEdoxe = nameLower.includes('edoxe') || emailLower.includes('edoxe');
+          const admin = isEdoxe ? false : Boolean(freelancer.is_admin);
+
           setIsAdmin(admin);
           if (typeof window !== 'undefined') {
             localStorage.setItem('trelio_is_admin', admin ? 'true' : 'false');
@@ -72,14 +87,27 @@ export function AppHeader() {
       const supabase = createClient();
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         if (session?.user) {
-          const { data: freelancer } = await supabase
+          let { data: freelancer } = await supabase
             .from('freelancers')
-            .select('is_admin')
+            .select('id, name, email, is_admin')
             .eq('user_id', session.user.id)
             .maybeSingle();
 
+          if (!freelancer && session.user.email) {
+            const { data: byEmail } = await supabase
+              .from('freelancers')
+              .select('id, name, email, is_admin')
+              .ilike('email', session.user.email)
+              .maybeSingle();
+            if (byEmail) freelancer = byEmail;
+          }
+
           if (isMounted && freelancer) {
-            const admin = Boolean(freelancer.is_admin);
+            const nameLower = (freelancer.name || '').toLowerCase();
+            const emailLower = (freelancer.email || '').toLowerCase();
+            const isEdoxe = nameLower.includes('edoxe') || emailLower.includes('edoxe');
+            const admin = isEdoxe ? false : Boolean(freelancer.is_admin);
+
             setIsAdmin(admin);
             if (typeof window !== 'undefined') {
               localStorage.setItem('trelio_is_admin', admin ? 'true' : 'false');

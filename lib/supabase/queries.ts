@@ -8,14 +8,47 @@ export async function getFreelancerProfile(supabase: SupabaseClient) {
     return { user: null, freelancer: null, error: authError?.message || 'Not authenticated' };
   }
 
-  const { data: freelancer, error: freelancerError } = await supabase
+  let { data: freelancer, error: freelancerError } = await supabase
     .from('freelancers')
     .select('*')
     .eq('user_id', user.id)
     .maybeSingle();
 
-  if (freelancerError) {
+  // Fallback by email if not linked by user_id
+  if (!freelancer && user.email) {
+    const { data: byEmail } = await supabase
+      .from('freelancers')
+      .select('*')
+      .ilike('email', user.email)
+      .maybeSingle();
+
+    if (byEmail) {
+      freelancer = byEmail;
+      // Self-heal: link authenticated user_id to this profile
+      await supabase
+        .from('freelancers')
+        .update({ user_id: user.id })
+        .eq('id', byEmail.id);
+    }
+  }
+
+  if (freelancerError && !freelancer) {
     return { user, freelancer: null, error: freelancerError.message };
+  }
+
+  if (freelancer) {
+    // If user is edoxe, guarantee freelancer status (is_admin = false)
+    const nameLower = (freelancer.name || '').toLowerCase();
+    const emailLower = (freelancer.email || '').toLowerCase();
+    if (nameLower.includes('edoxe') || emailLower.includes('edoxe')) {
+      if (freelancer.is_admin) {
+        await supabase
+          .from('freelancers')
+          .update({ is_admin: false })
+          .eq('id', freelancer.id);
+        freelancer.is_admin = false;
+      }
+    }
   }
 
   return { user, freelancer: freelancer as Freelancer, error: null };

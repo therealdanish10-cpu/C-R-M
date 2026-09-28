@@ -41,14 +41,43 @@ export async function checkIsAdmin(supabase: SupabaseClient): Promise<{
     return { isAdmin: false, freelancer: null };
   }
 
-  const { data: freelancer } = await supabase
+  let { data: freelancer } = await supabase
     .from('freelancers')
     .select('*')
     .eq('user_id', user.id)
-    .single();
+    .maybeSingle();
+
+  if (!freelancer && user.email) {
+    const { data: byEmail } = await supabase
+      .from('freelancers')
+      .select('*')
+      .ilike('email', user.email)
+      .maybeSingle();
+
+    if (byEmail) {
+      freelancer = byEmail;
+      await supabase
+        .from('freelancers')
+        .update({ user_id: user.id })
+        .eq('id', byEmail.id);
+    }
+  }
 
   if (!freelancer) {
     return { isAdmin: false, freelancer: null };
+  }
+
+  // If edoxe, guarantee freelancer status (is_admin = false)
+  const nameLower = (freelancer.name || '').toLowerCase();
+  const emailLower = (freelancer.email || '').toLowerCase();
+  if (nameLower.includes('edoxe') || emailLower.includes('edoxe')) {
+    if (freelancer.is_admin) {
+      await supabase
+        .from('freelancers')
+        .update({ is_admin: false })
+        .eq('id', freelancer.id);
+      freelancer.is_admin = false;
+    }
   }
 
   return {
@@ -162,6 +191,17 @@ export async function getAdminLeadsData(supabase: SupabaseClient): Promise<{
 
 // 3. Admin Freelancers Data
 export async function getAdminFreelancersData(supabase: SupabaseClient): Promise<Freelancer[]> {
+  // Enforce edoxe is freelancer if present
+  try {
+    await supabase
+      .from('freelancers')
+      .update({ is_admin: false })
+      .or('name.ilike.%edoxe%,email.ilike.%edoxe%')
+      .eq('is_admin', true);
+  } catch (e) {
+    // Non-blocking
+  }
+
   const { data } = await supabase.from('freelancers').select('*').order('created_at', { ascending: false });
   return (data || []) as Freelancer[];
 }

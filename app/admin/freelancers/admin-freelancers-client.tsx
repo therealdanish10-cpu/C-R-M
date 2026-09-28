@@ -47,6 +47,7 @@ export function AdminFreelancersClient({
   const [editingFreelancer, setEditingFreelancer] = useState<Freelancer | null>(null);
   const [editRate, setEditRate] = useState<string>('15');
   const [editStatus, setEditStatus] = useState<string>('active');
+  const [editIsAdmin, setEditIsAdmin] = useState<boolean>(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // Delete Freelancer Confirmation
@@ -148,6 +149,7 @@ export function AdminFreelancersClient({
           .update({
             commission_rate: parsedRate,
             status: editStatus,
+            is_admin: editIsAdmin,
           })
           .eq('id', editingFreelancer.id);
 
@@ -157,12 +159,12 @@ export function AdminFreelancersClient({
           setFreelancers((prev) =>
             prev.map((f) =>
               f.id === editingFreelancer.id
-                ? { ...f, commission_rate: parsedRate, status: editStatus }
+                ? { ...f, commission_rate: parsedRate, status: editStatus, is_admin: editIsAdmin }
                 : f
             )
           );
           setEditingFreelancer(null);
-          showToast('Freelancer updated successfully');
+          showToast(`Updated ${editingFreelancer.name} (${editIsAdmin ? 'Admin' : 'Freelancer'}) successfully`);
         }
       } catch (err: any) {
         showToast(err?.message || 'Failed to update freelancer', 'error');
@@ -172,15 +174,40 @@ export function AdminFreelancersClient({
       setFreelancers((prev) =>
         prev.map((f) =>
           f.id === editingFreelancer.id
-            ? { ...f, commission_rate: parsedRate, status: editStatus }
+            ? { ...f, commission_rate: parsedRate, status: editStatus, is_admin: editIsAdmin }
             : f
         )
       );
       setEditingFreelancer(null);
-      showToast('[Demo Mode] Freelancer updated successfully');
+      showToast(`[Demo Mode] Updated ${editingFreelancer.name} (${editIsAdmin ? 'Admin' : 'Freelancer'}) successfully`);
     }
 
     setIsSavingEdit(false);
+  };
+
+  // One-click toggle role handler
+  const handleToggleRole = async (fl: Freelancer) => {
+    const newIsAdmin = !fl.is_admin;
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+        const { error } = await supabase
+          .from('freelancers')
+          .update({ is_admin: newIsAdmin })
+          .eq('id', fl.id);
+        if (error) {
+          showToast(`Error updating role: ${error.message}`, 'error');
+          return;
+        }
+      } catch (err: any) {
+        showToast(err?.message || 'Failed to update role', 'error');
+        return;
+      }
+    }
+    setFreelancers((prev) =>
+      prev.map((f) => (f.id === fl.id ? { ...f, is_admin: newIsAdmin } : f))
+    );
+    showToast(`${fl.name} is now set as ${newIsAdmin ? 'Administrator' : 'Freelancer'}`);
   };
 
   // Delete freelancer handler:
@@ -318,11 +345,18 @@ export function AdminFreelancersClient({
                     <td className="py-3.5 px-4">
                       <div className="font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
                         <span>{fl.name}</span>
-                        {fl.is_admin && (
-                          <span className="text-[10px] uppercase font-bold text-amber-600 bg-amber-100 dark:bg-amber-950 dark:text-amber-300 px-1.5 py-0.2 rounded border border-amber-200 dark:border-amber-800">
-                            Admin
-                          </span>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleRole(fl)}
+                          title={`Click to change role to ${fl.is_admin ? 'Freelancer' : 'Administrator'}`}
+                          className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
+                            fl.is_admin
+                              ? 'text-amber-800 bg-amber-100 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-300 border-amber-300 dark:border-amber-800'
+                              : 'text-blue-700 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                          }`}
+                        >
+                          {fl.is_admin ? 'Admin' : 'Freelancer'}
+                        </button>
                       </div>
                       <div className="text-[11px] text-zinc-400 font-mono mt-0.5">ID: {fl.id}</div>
                     </td>
@@ -348,7 +382,7 @@ export function AdminFreelancersClient({
                         <span>{fl.country || 'N/A'}</span>
                       </div>
                       <div className="flex items-center gap-1 text-zinc-400 text-[11px] mt-0.5">
-                        <Clock className="w-3 h-3 text-zinc-400" />
+                        <Clock className="w-3.5 h-3.5 text-zinc-400" />
                         <span>{fl.timezone || 'UTC'}</span>
                       </div>
                     </td>
@@ -386,6 +420,7 @@ export function AdminFreelancersClient({
                             setEditingFreelancer(fl);
                             setEditRate(String(fl.commission_rate ?? 15));
                             setEditStatus(fl.status || 'active');
+                            setEditIsAdmin(Boolean(fl.is_admin));
                           }}
                           className="inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-md bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 transition"
                         >
@@ -617,6 +652,25 @@ export function AdminFreelancersClient({
                   <option value="active">Active</option>
                   <option value="inactive">Inactive</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider mb-1.5">
+                  Account Role
+                </label>
+                <select
+                  value={editIsAdmin ? 'admin' : 'freelancer'}
+                  onChange={(e) => setEditIsAdmin(e.target.value === 'admin')}
+                  className="w-full px-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg font-semibold"
+                >
+                  <option value="freelancer">Freelancer (Standard Caller Access)</option>
+                  <option value="admin">Administrator (Full Agency Control)</option>
+                </select>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
+                  {editIsAdmin
+                    ? 'Admins have access to /admin portal, bulk deletes, and team management.'
+                    : 'Freelancers access their cold-calling pipeline, view lead details, log calls, book meetings, and record sales.'}
+                </p>
               </div>
 
               <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">

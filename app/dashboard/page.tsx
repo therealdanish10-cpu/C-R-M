@@ -214,12 +214,23 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           stats = fetchedStats;
           leads = fetchedLeads;
         } else {
-          // Regular freelancer: strictly shows leads assigned to their account
+          // Regular freelancer: shows leads assigned to their account
           activeView = freelancer.id;
-          const [fetchedStats, fetchedLeads] = await Promise.all([
+          let [fetchedStats, fetchedLeads] = await Promise.all([
             getDashboardStats(supabase, freelancer.id),
             getFreelancerLeads(supabase, freelancer.id),
           ]);
+
+          // If no leads are assigned yet to this freelancer, show unassigned pool leads
+          // so the freelancer has leads to claim and call
+          if (fetchedLeads.length === 0) {
+            const unassignedLeads = await getFreelancerLeads(supabase, 'unassigned');
+            if (unassignedLeads.length > 0) {
+              fetchedLeads = unassignedLeads;
+              activeView = 'unassigned';
+            }
+          }
+
           stats = fetchedStats;
           leads = fetchedLeads;
         }
@@ -297,6 +308,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                   : activeView === 'unassigned'
                   ? 'Viewing currently unassigned leads.'
                   : `Viewing pipeline for ${allFreelancers.find((f) => f.id === activeView)?.name || 'freelancer'}.`
+                : activeView === 'unassigned'
+                ? 'Showing available unassigned pipeline leads you can claim and call.'
                 : 'Here is your outreach pipeline overview and assigned leads.'}
             </p>
           </div>
@@ -338,6 +351,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                     : activeView === 'unassigned'
                     ? 'Unassigned Leads'
                     : 'Assigned Leads'
+                  : activeView === 'unassigned'
+                  ? 'Available Unassigned Leads'
                   : 'Assigned Leads'}
               </span>
               <span className="text-xs px-2 py-0.5 rounded-md bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-semibold">

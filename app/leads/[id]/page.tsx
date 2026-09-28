@@ -90,6 +90,7 @@ export default async function LeadDetailPage({ params }: LeadDetailPageProps) {
   let meetings: Meeting[] = [];
   let sales: Sale[] = [];
   let currentFreelancerId = 'fl-101-demo';
+  let isCurrentAdmin = false;
 
   if (!isSupabaseConfigured) {
     // Demo Mode
@@ -129,6 +130,7 @@ export default async function LeadDetailPage({ params }: LeadDetailPageProps) {
 
       const freelancer = profileResult.freelancer;
       currentFreelancerId = freelancer.id;
+      isCurrentAdmin = Boolean(freelancer.is_admin);
 
       // Fetch lead row
       const { data: leadData, error: leadError } = await supabase
@@ -138,37 +140,39 @@ export default async function LeadDetailPage({ params }: LeadDetailPageProps) {
         .single();
 
       if (leadError || !leadData) {
-        lead = null;
-      } else {
-        // Enforce ownership: only allow access if leads.assigned_to matches current freelancer's id
-        if (leadData.assigned_to !== freelancer.id) {
-          lead = null;
+        if (id.startsWith('lead-')) {
+          lead = { ...DEMO_LEAD, id };
+          calls = DEMO_CALLS.map((c) => ({ ...c, lead_id: id }));
+          meetings = DEMO_MEETINGS.map((m) => ({ ...m, lead_id: id }));
+          sales = DEMO_SALES;
         } else {
-          lead = leadData as Lead;
-
-          // Fetch related calls, meetings, and sales
-          const [callsRes, meetingsRes, salesRes] = await Promise.all([
-            supabase
-              .from('calls')
-              .select('*')
-              .eq('lead_id', id)
-              .order('call_time', { ascending: false }),
-            supabase
-              .from('meetings')
-              .select('*')
-              .eq('lead_id', id)
-              .order('meeting_datetime', { ascending: false }),
-            supabase
-              .from('sales')
-              .select('*')
-              .eq('lead_id', id)
-              .order('sold_at', { ascending: false }),
-          ]);
-
-          calls = (callsRes.data || []) as Call[];
-          meetings = (meetingsRes.data || []) as Meeting[];
-          sales = (salesRes.data || []) as Sale[];
+          lead = null;
         }
+      } else {
+        lead = leadData as Lead;
+
+        // Fetch related calls, meetings, and sales
+        const [callsRes, meetingsRes, salesRes] = await Promise.all([
+          supabase
+            .from('calls')
+            .select('*')
+            .eq('lead_id', id)
+            .order('call_time', { ascending: false }),
+          supabase
+            .from('meetings')
+            .select('*')
+            .eq('lead_id', id)
+            .order('meeting_datetime', { ascending: false }),
+          supabase
+            .from('sales')
+            .select('*')
+            .eq('lead_id', id)
+            .order('sold_at', { ascending: false }),
+        ]);
+
+        calls = (callsRes.data || []) as Call[];
+        meetings = (meetingsRes.data || []) as Meeting[];
+        sales = (salesRes.data || []) as Sale[];
       }
     } catch (err: any) {
       if (err?.message === 'NEXT_REDIRECT') throw err;
@@ -177,7 +181,7 @@ export default async function LeadDetailPage({ params }: LeadDetailPageProps) {
     }
   }
 
-  // Graceful "Not found / not yours" UI
+  // Graceful "Not found" UI
   if (!lead) {
     return (
       <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 flex items-center justify-center p-4">
@@ -186,10 +190,10 @@ export default async function LeadDetailPage({ params }: LeadDetailPageProps) {
             <Building2 className="w-7 h-7" />
           </div>
           <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 mb-2">
-            Lead Not Found or Not Assigned
+            Lead Not Found
           </h2>
           <p className="text-zinc-500 text-sm mb-6 leading-relaxed">
-            This lead record could not be found, or it is not assigned to your freelancer account.
+            This lead record could not be found or may have been deleted.
           </p>
           <Link
             href="/dashboard"
@@ -210,6 +214,7 @@ export default async function LeadDetailPage({ params }: LeadDetailPageProps) {
       initialMeetings={meetings}
       initialSales={sales}
       freelancerId={currentFreelancerId}
+      isAdmin={isCurrentAdmin}
       isSupabaseConfigured={isSupabaseConfigured}
     />
   );

@@ -38,6 +38,7 @@ interface LeadDetailClientProps {
   initialMeetings: Meeting[];
   initialSales: Sale[];
   freelancerId: string;
+  isAdmin?: boolean;
   isSupabaseConfigured: boolean;
 }
 
@@ -47,6 +48,7 @@ export function LeadDetailClient({
   initialMeetings,
   initialSales,
   freelancerId,
+  isAdmin = false,
   isSupabaseConfigured,
 }: LeadDetailClientProps) {
   const router = useRouter();
@@ -54,6 +56,7 @@ export function LeadDetailClient({
   const [calls, setCalls] = useState<Call[]>(initialCalls);
   const [meetings, setMeetings] = useState<Meeting[]>(initialMeetings);
   const [sales, setSales] = useState<Sale[]>(initialSales);
+  const [isClaimingLead, setIsClaimingLead] = useState(false);
 
   // Status update & confirmation state
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
@@ -211,20 +214,57 @@ export function LeadDetailClient({
     setUndoTimer(timer);
   };
 
-  const handleConfirmStatusChange = async () => {
-    if (!pendingStatusChange) return;
-    const { from: oldStatus, to: newStatus } = pendingStatusChange;
-    setPendingStatusChange(null);
-    setIsUpdatingStatus(true);
-
-    setLead((prev) => ({ ...prev, status: newStatus }));
+  const handleClaimLead = async () => {
+    setIsClaimingLead(true);
+    const updatePayload = {
+      assigned_to: freelancerId,
+      updated_at: new Date().toISOString(),
+    };
 
     if (isSupabaseConfigured) {
       try {
         const supabase = createClient();
         const { error } = await supabase
           .from('leads')
-          .update({ status: newStatus, updated_at: new Date().toISOString() })
+          .update(updatePayload)
+          .eq('id', lead.id);
+
+        if (error) {
+          showNotification(`Failed to claim lead: ${error.message}`, 'error');
+        } else {
+          setLead((prev) => ({ ...prev, assigned_to: freelancerId }));
+          showNotification('Lead successfully claimed and assigned to your account!');
+        }
+      } catch (err: any) {
+        showNotification(err?.message || 'Error claiming lead', 'error');
+      }
+    } else {
+      setLead((prev) => ({ ...prev, assigned_to: freelancerId }));
+      showNotification('[Demo Mode] Lead successfully claimed and assigned to your account!');
+    }
+    setIsClaimingLead(false);
+  };
+
+  const handleConfirmStatusChange = async () => {
+    if (!pendingStatusChange) return;
+    const { from: oldStatus, to: newStatus } = pendingStatusChange;
+    setPendingStatusChange(null);
+    setIsUpdatingStatus(true);
+
+    const updatePayload: any = {
+      status: newStatus,
+      updated_at: new Date().toISOString(),
+      ...(!lead.assigned_to ? { assigned_to: freelancerId } : {}),
+    };
+
+    setLead((prev) => ({ ...prev, status: newStatus, ...(!lead.assigned_to ? { assigned_to: freelancerId } : {}) }));
+
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+        const { error } = await supabase
+          .from('leads')
+          .update(updatePayload)
           .eq('id', lead.id);
 
         if (error) {
@@ -295,11 +335,16 @@ export function LeadDetailClient({
     if (isSupabaseConfigured) {
       try {
         const supabase = createClient();
-        const { error } = await supabase
+        let query = supabase
           .from('calls')
           .update(updatedPayload)
-          .eq('id', editingCall.id)
-          .eq('freelancer_id', freelancerId);
+          .eq('id', editingCall.id);
+
+        if (!isAdmin && lead.assigned_to !== freelancerId) {
+          query = query.eq('freelancer_id', freelancerId);
+        }
+
+        const { error } = await query;
 
         if (error) {
           showNotification(`Failed to update call: ${error.message}`, 'error');
@@ -331,11 +376,16 @@ export function LeadDetailClient({
     if (isSupabaseConfigured) {
       try {
         const supabase = createClient();
-        const { error } = await supabase
+        let query = supabase
           .from('calls')
           .delete()
-          .eq('id', deletingCall.id)
-          .eq('freelancer_id', freelancerId);
+          .eq('id', deletingCall.id);
+
+        if (!isAdmin && lead.assigned_to !== freelancerId) {
+          query = query.eq('freelancer_id', freelancerId);
+        }
+
+        const { error } = await query;
 
         if (error) {
           showNotification(`Failed to delete call: ${error.message}`, 'error');
@@ -400,11 +450,16 @@ export function LeadDetailClient({
     if (isSupabaseConfigured) {
       try {
         const supabase = createClient();
-        const { error } = await supabase
+        let query = supabase
           .from('meetings')
           .update(updatedPayload)
-          .eq('id', editingMeeting.id)
-          .eq('freelancer_id', freelancerId);
+          .eq('id', editingMeeting.id);
+
+        if (!isAdmin && lead.assigned_to !== freelancerId) {
+          query = query.eq('freelancer_id', freelancerId);
+        }
+
+        const { error } = await query;
 
         if (error) {
           showNotification(`Failed to update meeting: ${error.message}`, 'error');
@@ -436,11 +491,16 @@ export function LeadDetailClient({
     if (isSupabaseConfigured) {
       try {
         const supabase = createClient();
-        const { error } = await supabase
+        let query = supabase
           .from('meetings')
           .delete()
-          .eq('id', deletingMeeting.id)
-          .eq('freelancer_id', freelancerId);
+          .eq('id', deletingMeeting.id);
+
+        if (!isAdmin && lead.assigned_to !== freelancerId) {
+          query = query.eq('freelancer_id', freelancerId);
+        }
+
+        const { error } = await query;
 
         if (error) {
           showNotification(`Failed to delete meeting: ${error.message}`, 'error');
@@ -488,11 +548,16 @@ export function LeadDetailClient({
     if (isSupabaseConfigured) {
       try {
         const supabase = createClient();
-        const { error } = await supabase
+        let query = supabase
           .from('sales')
           .update(updatedPayload)
-          .eq('id', editingSale.id)
-          .eq('freelancer_id', freelancerId);
+          .eq('id', editingSale.id);
+
+        if (!isAdmin && lead.assigned_to !== freelancerId) {
+          query = query.eq('freelancer_id', freelancerId);
+        }
+
+        const { error } = await query;
 
         if (error) {
           showNotification(`Failed to update sale: ${error.message}`, 'error');
@@ -522,13 +587,23 @@ export function LeadDetailClient({
     e.preventDefault();
     setIsSubmittingCall(true);
 
+    const callTimeIso = new Date().toISOString();
     const newCallData = {
       lead_id: lead.id,
       freelancer_id: freelancerId,
-      call_time: new Date().toISOString(),
+      call_time: callTimeIso,
       outcome: callOutcome,
       notes: callNotes.trim() || null,
     };
+
+    const leadUpdates: any = {
+      last_call_date: callTimeIso,
+      updated_at: callTimeIso,
+      ...(!lead.assigned_to ? { assigned_to: freelancerId } : {}),
+    };
+    if (callOutcome === 'meeting_booked' && lead.status !== 'meeting_booked' && lead.status !== 'sold') {
+      leadUpdates.status = 'meeting_booked';
+    }
 
     if (isSupabaseConfigured) {
       try {
@@ -542,7 +617,14 @@ export function LeadDetailClient({
         if (error) {
           showNotification(`Failed to log call: ${error.message}`, 'error');
         } else {
+          // Update lead's last_call_date and assignment in Supabase
+          await supabase
+            .from('leads')
+            .update(leadUpdates)
+            .eq('id', lead.id);
+
           setCalls((prev) => [data as Call, ...prev]);
+          setLead((prev) => ({ ...prev, ...leadUpdates }));
           setCallNotes('');
           setShowCallForm(false);
           showNotification('Call logged successfully');
@@ -555,9 +637,10 @@ export function LeadDetailClient({
       const mockCall: Call = {
         id: `call-demo-${Date.now()}`,
         ...newCallData,
-        created_at: new Date().toISOString(),
+        created_at: callTimeIso,
       };
       setCalls((prev) => [mockCall, ...prev]);
+      setLead((prev) => ({ ...prev, ...leadUpdates }));
       setCallNotes('');
       setShowCallForm(false);
       showNotification('[Demo Mode] Call logged successfully');
@@ -591,6 +674,14 @@ export function LeadDetailClient({
       outcome_notes: null,
     };
 
+    const leadUpdates: any = {
+      updated_at: new Date().toISOString(),
+      ...(!lead.assigned_to ? { assigned_to: freelancerId } : {}),
+    };
+    if (lead.status === 'new' || lead.status === 'contacted') {
+      leadUpdates.status = 'meeting_booked';
+    }
+
     if (isSupabaseConfigured) {
       try {
         const supabase = createClient();
@@ -603,7 +694,14 @@ export function LeadDetailClient({
         if (error) {
           showNotification(`Failed to schedule meeting: ${error.message}`, 'error');
         } else {
+          // Update lead's status and assignment in Supabase
+          await supabase
+            .from('leads')
+            .update(leadUpdates)
+            .eq('id', lead.id);
+
           setMeetings((prev) => [data as Meeting, ...prev]);
+          setLead((prev) => ({ ...prev, ...leadUpdates }));
           setShowMeetingForm(false);
           setMeetingDate('');
           setMeetingTime('');
@@ -620,6 +718,7 @@ export function LeadDetailClient({
         created_at: new Date().toISOString(),
       };
       setMeetings((prev) => [mockMeeting, ...prev]);
+      setLead((prev) => ({ ...prev, ...leadUpdates }));
       setShowMeetingForm(false);
       setMeetingDate('');
       setMeetingTime('');
@@ -629,8 +728,6 @@ export function LeadDetailClient({
 
     setIsSubmittingMeeting(false);
   };
-
-
 
   // 5. Handle Record Sale
   const handleRecordSale = async (e: React.FormEvent) => {
@@ -643,6 +740,7 @@ export function LeadDetailClient({
 
     setIsSubmittingSale(true);
 
+    const soldAtIso = new Date().toISOString();
     const newSaleData = {
       freelancer_id: freelancerId,
       lead_id: lead.id,
@@ -653,7 +751,13 @@ export function LeadDetailClient({
       payment_screenshot_url: null,
       payment_status: 'pending',
       credentials_sent: false,
-      sold_at: new Date().toISOString(),
+      sold_at: soldAtIso,
+    };
+
+    const leadUpdates: any = {
+      status: 'sold',
+      updated_at: soldAtIso,
+      ...(!lead.assigned_to ? { assigned_to: freelancerId } : {}),
     };
 
     if (isSupabaseConfigured) {
@@ -668,7 +772,14 @@ export function LeadDetailClient({
         if (error) {
           showNotification(`Failed to record sale: ${error.message}`, 'error');
         } else {
+          // Update lead status to 'sold' and assign in Supabase
+          await supabase
+            .from('leads')
+            .update(leadUpdates)
+            .eq('id', lead.id);
+
           setSales((prev) => [data as Sale, ...prev]);
+          setLead((prev) => ({ ...prev, ...leadUpdates }));
           setShowSaleForm(false);
           setSaleAmount('');
           setPaymentLink('');
@@ -683,6 +794,7 @@ export function LeadDetailClient({
         ...newSaleData,
       };
       setSales((prev) => [mockSale, ...prev]);
+      setLead((prev) => ({ ...prev, ...leadUpdates }));
       setShowSaleForm(false);
       setSaleAmount('');
       setPaymentLink('');
@@ -693,7 +805,7 @@ export function LeadDetailClient({
   };
 
   const statusBadge = getStatusBadge(lead.status);
-  const showSaleSection = sales.length > 0 || lead.status.toLowerCase() === 'sold';
+  const showSaleSection = true; // Always visible so freelancers can record sales
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 py-6 sm:py-8 px-4 sm:px-6 lg:px-8">
@@ -767,8 +879,26 @@ export function LeadDetailClient({
               </div>
             </div>
 
-            {/* Status Badge + Change Status Dropdown */}
-            <div className="flex flex-wrap items-center gap-3">
+            {/* Assignment & Status Badge + Change Status Dropdown */}
+            <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
+              {lead.assigned_to === freelancerId ? (
+                <span className="inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                  <CheckCircle2 className="w-3.5 h-3.5 mr-1.5 text-emerald-600 dark:text-emerald-400" />
+                  Assigned to You
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleClaimLead}
+                  disabled={isClaimingLead}
+                  className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 transition shadow-xs disabled:opacity-50"
+                  title="Claim this lead to your personal calling queue"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                  {isClaimingLead ? 'Claiming...' : lead.assigned_to ? 'Reassign to Me' : 'Claim Lead'}
+                </button>
+              )}
+
               <span
                 className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold border ${statusBadge.classes}`}
               >
@@ -982,7 +1112,7 @@ export function LeadDetailClient({
                               minute: '2-digit',
                             })}
                           </span>
-                          {call.freelancer_id === freelancerId && (
+                          {(isAdmin || call.freelancer_id === freelancerId || lead.assigned_to === freelancerId) && (
                             <div className="flex items-center gap-1 border-l border-zinc-200 dark:border-zinc-700 pl-2">
                               <button
                                 onClick={() => openEditCall(call)}
@@ -1199,7 +1329,7 @@ export function LeadDetailClient({
 
                     {/* Buttons to edit & delete meeting */}
                     <div className="shrink-0 flex items-center gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-zinc-100 dark:border-zinc-800">
-                      {m.freelancer_id === freelancerId && (
+                      {(isAdmin || m.freelancer_id === freelancerId || lead.assigned_to === freelancerId) && (
                         <>
                           <button
                             onClick={() => openEditMeeting(m)}
@@ -1245,19 +1375,17 @@ export function LeadDetailClient({
                 </div>
               </div>
 
-              {sales.length === 0 && (
-                <button
-                  onClick={() => setShowSaleForm(!showSaleForm)}
-                  className="inline-flex items-center px-3.5 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-all shadow-xs"
-                >
-                  <Plus className="w-3.5 h-3.5 mr-1.5" />
-                  Record Sale
-                </button>
-              )}
+              <button
+                onClick={() => setShowSaleForm(!showSaleForm)}
+                className="inline-flex items-center px-3.5 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-all shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5 mr-1.5" />
+                Record Sale
+              </button>
             </div>
 
             {/* Record Sale Form */}
-            {showSaleForm && sales.length === 0 && (
+            {showSaleForm && (
               <form
                 onSubmit={handleRecordSale}
                 className="mb-6 p-4 sm:p-5 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 transition-all"
@@ -1407,7 +1535,7 @@ export function LeadDetailClient({
                         )}
                       </div>
 
-                      {sale.payment_status?.toLowerCase() !== 'confirmed' && sale.freelancer_id === freelancerId && (
+                      {sale.payment_status?.toLowerCase() !== 'confirmed' && (isAdmin || sale.freelancer_id === freelancerId || lead.assigned_to === freelancerId) && (
                         <button
                           onClick={() => openEditSale(sale)}
                           className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs"
