@@ -133,7 +133,16 @@ const DEMO_LEADS: Lead[] = [
   },
 ];
 
-export default async function DashboardPage() {
+import { DashboardViewSelector } from './dashboard-view-selector';
+
+interface DashboardPageProps {
+  searchParams?: Promise<{ freelancer?: string; view?: string }>;
+}
+
+export default async function DashboardPage({ searchParams }: DashboardPageProps) {
+  const resolvedParams = searchParams ? await searchParams : {};
+  const requestedFreelancer = resolvedParams.freelancer;
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
   const isSupabaseConfigured = Boolean(
@@ -153,6 +162,8 @@ export default async function DashboardPage() {
   let leads: Lead[] = [];
   let isDemoMode = false;
   let errorMessage: string | null = null;
+  let allFreelancers: Freelancer[] = [];
+  let activeView = 'all';
 
   if (!isSupabaseConfigured) {
     // Graceful fallback when credentials aren't supplied in .env
@@ -166,21 +177,52 @@ export default async function DashboardPage() {
       const profileResult = await getFreelancerProfile(supabase);
 
       if (!profileResult.user) {
-        // User is not signed in via Supabase Auth
-        redirect('/login');
-      }
-
-      if (!profileResult.freelancer) {
+        // Fallback to demo mode preview if not signed in, so dashboard is accessible
+        freelancer = DEMO_FREELANCER;
+        stats = DEMO_STATS;
+        leads = DEMO_LEADS;
+        isDemoMode = true;
+      } else if (!profileResult.freelancer) {
         errorMessage = `No freelancer profile found for logged-in user (${profileResult.user.email}). Ensure a row exists in the 'freelancers' table with user_id = auth.uid().`;
       } else {
         freelancer = profileResult.freelancer;
-        // Fetch real stats and leads assigned to this freelancer
-        const [fetchedStats, fetchedLeads] = await Promise.all([
-          getDashboardStats(supabase, freelancer.id),
-          getFreelancerLeads(supabase, freelancer.id),
-        ]);
-        stats = fetchedStats;
-        leads = fetchedLeads;
+        const isAdmin = Boolean(freelancer.is_admin);
+
+        if (isAdmin) {
+          // Fetch freelancers list so admin can switch views
+          const { data: flList } = await supabase.from('freelancers').select('*').order('name');
+          allFreelancers = (flList || []) as Freelancer[];
+
+          // Determine which queue to show:
+          // If query param ?freelancer=... is specified, use it.
+          // Otherwise, if admin has personal leads assigned, show personal; else default to 'all'.
+          if (requestedFreelancer) {
+            activeView = requestedFreelancer;
+          } else {
+            const personalLeads = await getFreelancerLeads(supabase, freelancer.id);
+            if (personalLeads.length > 0) {
+              activeView = freelancer.id;
+            } else {
+              activeView = 'all';
+            }
+          }
+
+          const [fetchedStats, fetchedLeads] = await Promise.all([
+            getDashboardStats(supabase, activeView),
+            getFreelancerLeads(supabase, activeView),
+          ]);
+          stats = fetchedStats;
+          leads = fetchedLeads;
+        } else {
+          // Regular freelancer: strictly shows leads assigned to their account
+          activeView = freelancer.id;
+          const [fetchedStats, fetchedLeads] = await Promise.all([
+            getDashboardStats(supabase, freelancer.id),
+            getFreelancerLeads(supabase, freelancer.id),
+          ]);
+          stats = fetchedStats;
+          leads = fetchedLeads;
+        }
       }
     } catch (err: any) {
       if (err?.message === 'NEXT_REDIRECT') throw err;
@@ -189,16 +231,26 @@ export default async function DashboardPage() {
     }
   }
 
+  const isAdmin = Boolean(freelancer?.is_admin);
+
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-7xl mx-auto">
         {/* Banner if in Demo mode */}
         {isDemoMode && (
-          <div className="mb-6 p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 flex items-start gap-3 text-sm text-amber-900 dark:text-amber-200">
-            <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <span className="font-semibold">Interactive Demo Mode Active:</span> Supabase environment variables (<code className="font-mono text-xs bg-amber-100 dark:bg-amber-900/60 px-1.5 py-0.5 rounded">NEXT_PUBLIC_SUPABASE_URL</code> & <code className="font-mono text-xs bg-amber-100 dark:bg-amber-900/60 px-1.5 py-0.5 rounded">NEXT_PUBLIC_SUPABASE_ANON_KEY</code>) are not configured yet. Showing mock cold-calling pipeline data so you can test all features immediately.
+          <div className="mb-6 p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 flex items-start justify-between gap-3 text-sm text-amber-900 dark:text-amber-200">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold">Interactive Demo Mode Active:</span> Viewing sample cold-calling pipeline data. Sign in to access your live assigned leads.
+              </div>
             </div>
+            <Link
+              href="/login"
+              className="shrink-0 px-3 py-1 rounded-lg text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white transition shadow-xs"
+            >
+              Sign In
+            </Link>
           </div>
         )}
 
@@ -212,19 +264,40 @@ export default async function DashboardPage() {
           </div>
         )}
 
+        {/* Admin Pipeline Control Bar (Only for Administrators) */}
+        {isAdmin && !isDemoMode && freelancer && (
+          <DashboardViewSelector
+            freelancers={allFreelancers}
+            currentSelected={activeView}
+            adminFreelancerId={freelancer.id}
+            totalLeadsCount={stats.totalLeadsAssigned}
+          />
+        )}
+
         {/* Dashboard Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                Freelancer Dashboard
+                {isAdmin ? 'Pipeline Dashboard' : 'Freelancer Dashboard'}
               </h1>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-                Cold-Calling Pipeline
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                isAdmin
+                  ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                  : 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+              }`}>
+                {isAdmin ? 'Admin View' : 'Cold-Calling Pipeline'}
               </span>
             </div>
             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              Welcome back{freelancer ? `, ${freelancer.name}` : ''}. Here is your outreach pipeline overview and assigned leads.
+              Welcome back{freelancer ? `, ${freelancer.name}` : ''}.{' '}
+              {isAdmin
+                ? activeView === 'all'
+                  ? 'Viewing all leads across the agency pipeline.'
+                  : activeView === 'unassigned'
+                  ? 'Viewing currently unassigned leads.'
+                  : `Viewing pipeline for ${allFreelancers.find((f) => f.id === activeView)?.name || 'freelancer'}.`
+                : 'Here is your outreach pipeline overview and assigned leads.'}
             </p>
           </div>
 
@@ -258,7 +331,15 @@ export default async function DashboardPage() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
-              <span>Assigned Leads</span>
+              <span>
+                {isAdmin
+                  ? activeView === 'all'
+                    ? 'All Agency Leads'
+                    : activeView === 'unassigned'
+                    ? 'Unassigned Leads'
+                    : 'Assigned Leads'
+                  : 'Assigned Leads'}
+              </span>
               <span className="text-xs px-2 py-0.5 rounded-md bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-semibold">
                 {leads.length}
               </span>

@@ -12,7 +12,7 @@ export async function getFreelancerProfile(supabase: SupabaseClient) {
     .from('freelancers')
     .select('*')
     .eq('user_id', user.id)
-    .single();
+    .maybeSingle();
 
   if (freelancerError) {
     return { user, freelancer: null, error: freelancerError.message };
@@ -23,7 +23,7 @@ export async function getFreelancerProfile(supabase: SupabaseClient) {
 
 export async function getDashboardStats(
   supabase: SupabaseClient,
-  freelancerId: string
+  freelancerId?: string
 ): Promise<DashboardStats> {
   const now = new Date();
   
@@ -33,32 +33,33 @@ export async function getDashboardStats(
   // Start of current month in ISO format
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-  // 1. Total leads assigned
-  const leadsPromise = supabase
+  let leadsPromise = supabase
     .from('leads')
-    .select('*', { count: 'exact', head: true })
-    .eq('assigned_to', freelancerId);
+    .select('*', { count: 'exact', head: true });
 
-  // 2. Calls made this week (within last 7 days)
-  const callsPromise = supabase
+  let callsPromise = supabase
     .from('calls')
     .select('*', { count: 'exact', head: true })
-    .eq('freelancer_id', freelancerId)
     .gte('call_time', sevenDaysAgo);
 
-  // 3. Meetings booked (status = 'scheduled')
-  const meetingsPromise = supabase
+  let meetingsPromise = supabase
     .from('meetings')
     .select('*', { count: 'exact', head: true })
-    .eq('freelancer_id', freelancerId)
     .eq('status', 'scheduled');
 
-  // 4. Sales closed this month (sold_at within current month)
-  const salesPromise = supabase
+  let salesPromise = supabase
     .from('sales')
     .select('*', { count: 'exact', head: true })
-    .eq('freelancer_id', freelancerId)
     .gte('sold_at', startOfMonth);
+
+  if (freelancerId === 'unassigned') {
+    leadsPromise = leadsPromise.is('assigned_to', null);
+  } else if (freelancerId && freelancerId !== 'all') {
+    leadsPromise = leadsPromise.eq('assigned_to', freelancerId);
+    callsPromise = callsPromise.eq('freelancer_id', freelancerId);
+    meetingsPromise = meetingsPromise.eq('freelancer_id', freelancerId);
+    salesPromise = salesPromise.eq('freelancer_id', freelancerId);
+  }
 
   const [leadsRes, callsRes, meetingsRes, salesRes] = await Promise.all([
     leadsPromise,
@@ -77,28 +78,41 @@ export async function getDashboardStats(
 
 export async function getFreelancerLeads(
   supabase: SupabaseClient,
-  freelancerId: string
+  freelancerId?: string
 ): Promise<Lead[]> {
-  // Query leads assigned to this freelancer
-  const { data: leads, error: leadsError } = await supabase
+  let leadsQuery = supabase
     .from('leads')
     .select('*')
-    .eq('assigned_to', freelancerId)
     .order('created_at', { ascending: false });
 
+  if (freelancerId === 'unassigned') {
+    leadsQuery = leadsQuery.is('assigned_to', null);
+  } else if (freelancerId && freelancerId !== 'all') {
+    leadsQuery = leadsQuery.eq('assigned_to', freelancerId);
+  }
+
+  const { data: leads, error: leadsError } = await leadsQuery;
+
   if (leadsError || !leads || leads.length === 0) {
+    if (leadsError) console.error('Error in getFreelancerLeads:', leadsError);
     return [];
   }
 
   // To efficiently get the most recent call_time for each lead,
-  // fetch recent calls for this freelancer
+  // fetch recent calls for these leads
   const leadIds = leads.map((l) => l.id);
-  const { data: calls } = await supabase
+  let callsQuery = supabase
     .from('calls')
     .select('lead_id, call_time')
-    .eq('freelancer_id', freelancerId)
     .in('lead_id', leadIds)
     .order('call_time', { ascending: false });
+
+  if (freelancerId && freelancerId !== 'all' && freelancerId !== 'unassigned') {
+    callsQuery = callsQuery.eq('freelancer_id', freelancerId);
+  }
+
+  const { data: calls, error: callsError } = await callsQuery;
+  if (callsError) console.error('Error fetching calls for leads:', callsError);
 
   // Map latest call time by lead_id
   const latestCallMap = new Map<string, string>();

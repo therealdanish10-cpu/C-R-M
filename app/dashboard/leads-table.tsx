@@ -46,15 +46,15 @@ export function LeadsTable({ initialLeads }: LeadsTableProps) {
     return initialLeads
       .filter((lead) => {
         // Status filter
-        if (statusFilter !== 'all' && lead.status.toLowerCase() !== statusFilter.toLowerCase()) {
+        if (statusFilter !== 'all' && (lead.status || '').toLowerCase() !== statusFilter.toLowerCase()) {
           return false;
         }
 
         // Search term filter (business name or phone)
         if (searchTerm.trim() !== '') {
           const term = searchTerm.toLowerCase();
-          const matchesName = lead.business_name?.toLowerCase().includes(term);
-          const matchesPhone = lead.phone?.toLowerCase().includes(term);
+          const matchesName = (lead.business_name || '').toLowerCase().includes(term);
+          const matchesPhone = (lead.phone || '').toLowerCase().includes(term);
           if (!matchesName && !matchesPhone) {
             return false;
           }
@@ -284,8 +284,19 @@ export function LeadsTable({ initialLeads }: LeadsTableProps) {
                 <td colSpan={6} className="py-12 text-center text-zinc-500 dark:text-zinc-400">
                   <div className="flex flex-col items-center justify-center space-y-2">
                     <Building2 className="w-8 h-8 text-zinc-300 dark:text-zinc-600" />
-                    <p className="font-medium">No leads match your filter</p>
-                    <p className="text-xs text-zinc-400">Try adjusting your search query or status dropdown.</p>
+                    {initialLeads.length === 0 ? (
+                      <>
+                        <p className="font-semibold text-zinc-800 dark:text-zinc-200">No leads in this queue</p>
+                        <p className="text-xs text-zinc-400 max-w-sm">
+                          There are currently no leads assigned to this view. Once leads are assigned by an administrator, they will appear here.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-medium">No leads match your filter</p>
+                        <p className="text-xs text-zinc-400">Try adjusting your search query or status dropdown.</p>
+                      </>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -381,8 +392,19 @@ export function LeadsTable({ initialLeads }: LeadsTableProps) {
         {filteredLeads.length === 0 ? (
           <div className="p-8 text-center text-zinc-500 dark:text-zinc-400">
             <Building2 className="w-8 h-8 mx-auto text-zinc-300 dark:text-zinc-600 mb-2" />
-            <p className="font-medium text-sm">No leads match your filter</p>
-            <p className="text-xs text-zinc-400 mt-1">Try resetting search or filters.</p>
+            {initialLeads.length === 0 ? (
+              <>
+                <p className="font-semibold text-zinc-800 dark:text-zinc-200 text-sm">No leads in this queue</p>
+                <p className="text-xs text-zinc-400 mt-1 max-w-xs mx-auto">
+                  There are currently no leads assigned to this view.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-medium text-sm">No leads match your filter</p>
+                <p className="text-xs text-zinc-400 mt-1">Try resetting search or filters.</p>
+              </>
+            )}
           </div>
         ) : (
           filteredLeads.map((lead) => {
