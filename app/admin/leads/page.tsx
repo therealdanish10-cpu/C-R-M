@@ -20,8 +20,12 @@ export default async function AdminLeadsPage() {
     try {
       const supabase = await createClient();
       const data = await getAdminLeadsData(supabase);
-      leads = data.leads;
-      freelancers = data.freelancers;
+      if (data.leads && data.leads.length > 0) {
+        leads = data.leads;
+      }
+      if (data.freelancers && data.freelancers.length > 0) {
+        freelancers = data.freelancers;
+      }
     } catch (err: any) {
       console.error('Error fetching admin leads:', err);
     }

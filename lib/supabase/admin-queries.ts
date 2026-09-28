@@ -250,7 +250,7 @@ export async function getAdminLeadsData(supabase: SupabaseClient): Promise<{
 
   const enrichedLeads: AdminLeadWithDetails[] = leads.map((lead) => ({
     ...lead,
-    freelancerName: flMap.get(lead.assigned_to) || 'Unassigned',
+    freelancerName: (lead.assigned_to ? flMap.get(lead.assigned_to) : null) || 'Unassigned',
     last_call_date: latestCallMap.get(lead.id) || null,
   }));
 
@@ -284,10 +284,15 @@ export async function getAdminFreelancersData(supabase: SupabaseClient): Promise
   const { data } = await supabase.from('freelancers').select('*').order('created_at', { ascending: false });
   let list = (data || []) as Freelancer[];
 
-  // Guarantee Danish is marked as admin in returned data
+  // Guarantee Danish is marked as admin, and edoxe is marked as freelancer in returned data
   list = list.map((fl) => {
     if (isExplicitAdminEmail(fl.email)) {
       return { ...fl, is_admin: true };
+    }
+    const nameLower = (fl.name || '').toLowerCase();
+    const emailLower = (fl.email || '').toLowerCase();
+    if (nameLower.includes('edoxe') || emailLower.includes('edoxe')) {
+      return { ...fl, is_admin: false };
     }
     return fl;
   });

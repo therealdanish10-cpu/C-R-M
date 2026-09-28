@@ -74,6 +74,9 @@ export function AdminFreelancersClient({
 
     setIsSubmittingNew(true);
 
+    const rawRate = parseFloat(newCommissionRate);
+    const parsedRate = isNaN(rawRate) ? 15 : rawRate;
+
     const payload = {
       name: newName.trim(),
       email: newEmail.trim().toLowerCase(),
@@ -81,28 +84,32 @@ export function AdminFreelancersClient({
       country: newCountry.trim() || null,
       timezone: newTimezone.trim() || null,
       status: 'active',
-      commission_rate: parseFloat(newCommissionRate) || 15.0,
-      user_id: newUserId.trim() || `placeholder-user-${Date.now()}`,
+      commission_rate: parsedRate,
+      user_id: newUserId.trim() || null,
       is_admin: newIsAdmin,
-      created_at: new Date().toISOString(),
     };
 
     if (isSupabaseConfigured) {
       try {
-        const supabase = createClient();
-        const { data, error } = await supabase
-          .from('freelancers')
-          .insert(payload)
-          .select()
-          .single();
+        const res = await fetch('/api/admin/freelancers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const resData = await res.json();
 
-        if (error) {
-          showToast(`Error adding freelancer: ${error.message}`, 'error');
-        } else {
-          setFreelancers((prev) => [data as Freelancer, ...prev]);
+        if (res.ok && resData.freelancer) {
+          setFreelancers((prev) => [resData.freelancer as Freelancer, ...prev]);
           setShowAddModal(false);
           resetForm();
-          showToast('Freelancer record created successfully');
+          showToast(`Freelancer ${payload.name} created successfully!`);
+        } else {
+          const errText = resData.error || 'Failed to add freelancer';
+          if (errText.includes('row-level security') || errText.includes('security policy')) {
+            showToast('RLS error: Run the supabase-fix.sql script in Supabase SQL Editor', 'error');
+          } else {
+            showToast(`Error adding freelancer: ${errText}`, 'error');
+          }
         }
       } catch (err: any) {
         showToast(err?.message || 'Failed to add freelancer', 'error');
@@ -112,6 +119,7 @@ export function AdminFreelancersClient({
       const mockRecord: Freelancer = {
         id: `fl-demo-${Date.now()}`,
         ...payload,
+        created_at: new Date().toISOString(),
       };
       setFreelancers((prev) => [mockRecord, ...prev]);
       setShowAddModal(false);
@@ -139,32 +147,37 @@ export function AdminFreelancersClient({
     if (!editingFreelancer) return;
 
     setIsSavingEdit(true);
-    const parsedRate = parseFloat(editRate) || 0;
+    const rawRate = parseFloat(editRate);
+    const parsedRate = isNaN(rawRate) ? 15 : rawRate;
 
     if (isSupabaseConfigured) {
       try {
-        const supabase = createClient();
-        const { error } = await supabase
-          .from('freelancers')
-          .update({
+        const res = await fetch('/api/admin/freelancers', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: editingFreelancer.id,
             commission_rate: parsedRate,
             status: editStatus,
             is_admin: editIsAdmin,
-          })
-          .eq('id', editingFreelancer.id);
+          }),
+        });
+        const resData = await res.json();
 
-        if (error) {
-          showToast(`Error updating freelancer: ${error.message}`, 'error');
-        } else {
+        if (res.ok) {
+          const updatedFl = resData.freelancer || {
+            ...editingFreelancer,
+            commission_rate: parsedRate > 1 ? parsedRate / 100 : parsedRate,
+            status: editStatus,
+            is_admin: editIsAdmin,
+          };
           setFreelancers((prev) =>
-            prev.map((f) =>
-              f.id === editingFreelancer.id
-                ? { ...f, commission_rate: parsedRate, status: editStatus, is_admin: editIsAdmin }
-                : f
-            )
+            prev.map((f) => (f.id === editingFreelancer.id ? updatedFl : f))
           );
           setEditingFreelancer(null);
-          showToast(`Updated ${editingFreelancer.name} (${editIsAdmin ? 'Admin' : 'Freelancer'}) successfully`);
+          showToast(`Updated ${editingFreelancer.name} successfully`);
+        } else {
+          showToast(`Error updating freelancer: ${resData.error}`, 'error');
         }
       } catch (err: any) {
         showToast(err?.message || 'Failed to update freelancer', 'error');
@@ -190,13 +203,17 @@ export function AdminFreelancersClient({
     const newIsAdmin = !fl.is_admin;
     if (isSupabaseConfigured) {
       try {
-        const supabase = createClient();
-        const { error } = await supabase
-          .from('freelancers')
-          .update({ is_admin: newIsAdmin })
-          .eq('id', fl.id);
-        if (error) {
-          showToast(`Error updating role: ${error.message}`, 'error');
+        const res = await fetch('/api/admin/freelancers', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: fl.id,
+            is_admin: newIsAdmin,
+          }),
+        });
+        if (!res.ok) {
+          const d = await res.json();
+          showToast(`Error updating role: ${d.error}`, 'error');
           return;
         }
       } catch (err: any) {
@@ -210,59 +227,35 @@ export function AdminFreelancersClient({
     showToast(`${fl.name} is now set as ${newIsAdmin ? 'Administrator' : 'Freelancer'}`);
   };
 
-  // Delete freelancer handler:
-  // Step 1 — nullify leads.assigned_to for this freelancer
-  // Step 2 — delete the freelancers row
+  // Delete freelancer handler
   const handleDeleteFreelancer = async () => {
     if (!deletingFreelancer) return;
     setIsDeletingConfirm(true);
 
     const fl = deletingFreelancer;
-
     if (isSupabaseConfigured) {
       try {
-        const supabase = createClient();
-
-        // Step 1: Unassign all leads belonging to this freelancer
-        const { error: unassignError } = await supabase
-          .from('leads')
-          .update({ assigned_to: null })
-          .eq('assigned_to', fl.id);
-
-        if (unassignError) {
-          showToast(`Error unassigning leads: ${unassignError.message}`, 'error');
-          setIsDeletingConfirm(false);
-          return;
+        const res = await fetch(`/api/admin/freelancers?id=${fl.id}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) {
+          const d = await res.json();
+          throw new Error(d.error || 'Failed to delete freelancer');
         }
 
-        // Step 2: Delete the freelancer row
-        const { error: deleteError } = await supabase
-          .from('freelancers')
-          .delete()
-          .eq('id', fl.id);
-
-        if (deleteError) {
-          showToast(`Error deleting freelancer: ${deleteError.message}`, 'error');
-          setIsDeletingConfirm(false);
-          return;
-        }
-
-        // Remove from local state and show post-deletion notice
         setFreelancers((prev) => prev.filter((f) => f.id !== fl.id));
-        setDeletedAuthHint(fl.email);
+        setDeletedAuthHint(fl.user_id ? `Linked user_id: ${fl.user_id}` : '');
         setDeleteStep('success');
       } catch (err: any) {
-        showToast(err?.message || 'Failed to delete freelancer', 'error');
-        setIsDeletingConfirm(false);
+        showToast(`Failed to delete: ${err?.message}`, 'error');
       }
     } else {
-      // Demo Mode — simulate both steps
+      // Demo Mode
       setFreelancers((prev) => prev.filter((f) => f.id !== fl.id));
-      setDeletedAuthHint(fl.email);
+      setDeletedAuthHint(fl.user_id ? `Linked user_id: ${fl.user_id}` : '');
       setDeleteStep('success');
     }
 
-    setIsDeletingConfirm(false);
   };
 
   const closeDeletionModal = () => {
@@ -390,7 +383,9 @@ export function AdminFreelancersClient({
                     {/* Commission Rate */}
                     <td className="py-3.5 px-4 whitespace-nowrap">
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-950/70 dark:text-amber-300 dark:border-amber-800">
-                        {fl.commission_rate ?? 15}%
+                        {((fl.commission_rate !== null && fl.commission_rate !== undefined)
+                          ? (fl.commission_rate <= 1 ? Math.round(fl.commission_rate * 100) : fl.commission_rate)
+                          : 15)}%
                       </span>
                     </td>
 
@@ -418,7 +413,10 @@ export function AdminFreelancersClient({
                         <button
                           onClick={() => {
                             setEditingFreelancer(fl);
-                            setEditRate(String(fl.commission_rate ?? 15));
+                            const displayRate = (fl.commission_rate !== null && fl.commission_rate !== undefined)
+                              ? (fl.commission_rate <= 1 ? Math.round(fl.commission_rate * 100) : fl.commission_rate)
+                              : 15;
+                            setEditRate(String(displayRate));
                             setEditStatus(fl.status || 'active');
                             setEditIsAdmin(Boolean(fl.is_admin));
                           }}

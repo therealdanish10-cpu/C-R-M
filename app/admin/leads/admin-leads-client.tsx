@@ -159,22 +159,26 @@ export function AdminLeadsClient({
 
     if (isSupabaseConfigured) {
       try {
-        const supabase = createClient();
-        const { error } = await supabase
-          .from('leads')
-          .update({ assigned_to: newFreelancerId, updated_at: new Date().toISOString() })
-          .eq('id', leadId);
+        const res = await fetch('/api/admin/leads', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leadIds: [leadId],
+            assigned_to: newFreelancerId || null,
+          }),
+        });
+        const resData = await res.json();
 
-        if (error) {
-          showToast(`Error assigning lead: ${error.message}`, 'error');
-        } else {
-          setLeads((prev) =>
-            prev.map((l) =>
-              l.id === leadId ? { ...l, assigned_to: newFreelancerId, freelancerName: newName } : l
-            )
-          );
-          showToast(`Lead reassigned to ${newName}`);
+        if (!res.ok) {
+          throw new Error(resData.error || 'Failed to reassign lead');
         }
+
+        setLeads((prev) =>
+          prev.map((l) =>
+            l.id === leadId ? { ...l, assigned_to: newFreelancerId || (null as any), freelancerName: newName } : l
+          )
+        );
+        showToast(`Lead reassigned to ${newName}`);
       } catch (err: any) {
         showToast(err?.message || 'Failed to reassign lead', 'error');
       }
@@ -182,7 +186,7 @@ export function AdminLeadsClient({
       // Demo Mode
       setLeads((prev) =>
         prev.map((l) =>
-          l.id === leadId ? { ...l, assigned_to: newFreelancerId, freelancerName: newName } : l
+          l.id === leadId ? { ...l, assigned_to: newFreelancerId || (null as any), freelancerName: newName } : l
         )
       );
       showToast(`[Demo Mode] Lead reassigned to ${newName}`);
@@ -206,25 +210,29 @@ export function AdminLeadsClient({
 
     if (isSupabaseConfigured) {
       try {
-        const supabase = createClient();
-        const { error } = await supabase
-          .from('leads')
-          .update({ assigned_to: bulkAssignTo, updated_at: new Date().toISOString() })
-          .in('id', idsArray);
+        const res = await fetch('/api/admin/leads', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leadIds: idsArray,
+            assigned_to: bulkAssignTo || null,
+          }),
+        });
+        const resData = await res.json();
 
-        if (error) {
-          showToast(`Error bulk assigning leads: ${error.message}`, 'error');
-        } else {
-          setLeads((prev) =>
-            prev.map((l) =>
-              selectedIds.has(l.id)
-                ? { ...l, assigned_to: bulkAssignTo, freelancerName: newName }
-                : l
-            )
-          );
-          setSelectedIds(new Set());
-          showToast(`Reassigned ${idsArray.length} leads to ${newName}`);
+        if (!res.ok) {
+          throw new Error(resData.error || 'Failed to bulk assign');
         }
+
+        setLeads((prev) =>
+          prev.map((l) =>
+            selectedIds.has(l.id)
+              ? { ...l, assigned_to: bulkAssignTo, freelancerName: newName }
+              : l
+          )
+        );
+        setSelectedIds(new Set());
+        showToast(`Reassigned ${idsArray.length} leads to ${newName}`);
       } catch (err: any) {
         showToast(err?.message || 'Failed to bulk assign', 'error');
       }
@@ -281,52 +289,15 @@ export function AdminLeadsClient({
 
     if (isSupabaseConfigured) {
       try {
-        const supabase = createClient();
+        const res = await fetch('/api/admin/leads', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leadIds: idsToDelete }),
+        });
+        const resData = await res.json();
 
-        for (let i = 0; i < idsToDelete.length; i += batchSize) {
-          const batch = idsToDelete.slice(i, i + batchSize);
-
-          // 1. Delete linked sales records
-          const { error: salesErr } = await supabase
-            .from('sales')
-            .delete()
-            .in('lead_id', batch);
-          if (salesErr) {
-            console.error('Error deleting linked sales records:', salesErr);
-          }
-
-          // 2. Delete linked meetings
-          const { error: meetingsErr } = await supabase
-            .from('meetings')
-            .delete()
-            .in('lead_id', batch);
-          if (meetingsErr) {
-            console.error('Error deleting linked meetings:', meetingsErr);
-          }
-
-          // 3. Delete linked calls
-          const { error: callsErr } = await supabase
-            .from('calls')
-            .delete()
-            .in('lead_id', batch);
-          if (callsErr) {
-            console.error('Error deleting linked calls:', callsErr);
-          }
-
-          // 4. Delete leads
-          const { error: leadsErr } = await supabase
-            .from('leads')
-            .delete()
-            .in('id', batch);
-
-          if (leadsErr) {
-            throw leadsErr;
-          }
-
-          setDeleteProgress({
-            current: Math.min(i + batchSize, totalCount),
-            total: totalCount,
-          });
+        if (!res.ok) {
+          throw new Error(resData.error || 'Failed to delete leads');
         }
 
         // Optimistically update local leads state and selected IDs
@@ -337,14 +308,6 @@ export function AdminLeadsClient({
           idsToDelete.forEach((id) => next.delete(id));
           return next;
         });
-
-        // Re-fetch fresh leads data from Supabase to guarantee complete sync
-        try {
-          const freshData = await getAdminLeadsData(supabase);
-          setLeads(freshData.leads);
-        } catch (fetchErr) {
-          console.warn('Could not re-fetch leads after deletion, local state updated:', fetchErr);
-        }
 
         showToast(`${totalCount} lead${totalCount === 1 ? '' : 's'} deleted`, 'success');
         setDeletingSelection(null);
@@ -407,47 +370,26 @@ export function AdminLeadsClient({
 
     if (isSupabaseConfigured) {
       try {
-        const supabase = createClient();
-        for (let i = 0; i < validRows.length; i += batchSize) {
-          const chunk = validRows.slice(i, i + batchSize);
-          const chunkPayload = chunk.map((r) => ({
-            business_name: r.business_name,
-            phone: r.phone || '',
-            email: r.email,
-            address: r.address,
-            city: r.city,
-            state: r.state,
-            category: r.category,
-            status: 'new',
-            assigned_to: null,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          }));
+        const res = await fetch('/api/admin/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leads: validRows }),
+        });
+        const resData = await res.json();
 
-          const { data, error } = await supabase
-            .from('leads')
-            .insert(chunkPayload)
-            .select();
-
-          if (error) {
-            throw error;
+        if (!res.ok) {
+          const errText = resData.error || 'Failed to upload leads';
+          if (errText.includes('row-level security') || errText.includes('security policy')) {
+            throw new Error('RLS error: Run the supabase-fix.sql script in Supabase SQL Editor');
           }
-
-          if (data) {
-            data.forEach((lead: any) => {
-              insertedLeads.push({
-                ...lead,
-                freelancerName: 'Unassigned',
-                last_call_date: null,
-              });
-            });
-          }
-
-          setImportProgress({
-            current: Math.min(i + batchSize, validRows.length),
-            total: validRows.length,
-          });
+          throw new Error(errText);
         }
+
+        const insertedLeads: AdminLeadWithDetails[] = (resData.leads || []).map((lead: any) => ({
+          ...lead,
+          freelancerName: 'Unassigned',
+          last_call_date: null,
+        }));
 
         // Refresh leads table immediately with newly imported records
         setLeads((prev) => [...insertedLeads, ...prev]);
@@ -792,6 +734,7 @@ export function AdminLeadsClient({
                           onChange={(e) => handleAssignSingle(lead.id, e.target.value)}
                           className="px-2.5 py-1 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-md font-medium text-zinc-900 dark:text-zinc-100 cursor-pointer disabled:opacity-50"
                         >
+                          <option value="">Unassigned</option>
                           {freelancers.map((f) => (
                             <option key={f.id} value={f.id}>
                               {f.name}

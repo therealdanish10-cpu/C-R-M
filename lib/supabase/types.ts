@@ -1,6 +1,6 @@
 export type Freelancer = {
   id: string;
-  user_id: string;
+  user_id: string | null;
   name: string;
   email: string;
   phone: string | null;
@@ -31,7 +31,7 @@ export type Lead = {
   state: string | null;
   category: string;
   status: LeadStatus | string;
-  assigned_to: string; // freelancer_id
+  assigned_to: string | null; // freelancer_id
   created_at: string;
   updated_at?: string;
   last_call_date?: string | null;

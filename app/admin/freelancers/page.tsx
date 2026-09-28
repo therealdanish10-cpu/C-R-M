@@ -18,7 +18,10 @@ export default async function AdminFreelancersPage() {
   if (isSupabaseConfigured) {
     try {
       const supabase = await createClient();
-      freelancers = await getAdminFreelancersData(supabase);
+      const fetched = await getAdminFreelancersData(supabase);
+      if (fetched && fetched.length > 0) {
+        freelancers = fetched;
+      }
     } catch (err: any) {
       console.error('Error fetching admin freelancers:', err);
     }
