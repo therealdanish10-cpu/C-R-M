@@ -50,9 +50,12 @@ function normalizeRow(rawRow: Record<string, any>): ParsedLeadRow | null {
   // 2. phone: from "phone"
   const rawPhone = lowerMap['phone'] != null ? String(lowerMap['phone']).trim() : '';
 
-  // 3. email: from "email" if column exists and non-empty
+  // 3. email: from "email" if column exists and non-empty (ignoring placeholders like None, N/A)
   const rawEmail = lowerMap['email'] != null ? String(lowerMap['email']).trim() : '';
-  const email = rawEmail ? rawEmail : null;
+  const email =
+    rawEmail && !['none', 'n/a', 'null', 'undefined', '-'].includes(rawEmail.toLowerCase())
+      ? rawEmail
+      : null;
 
   // 4. address: from "address"
   const rawAddress = lowerMap['address'] != null ? String(lowerMap['address']).trim() : '';

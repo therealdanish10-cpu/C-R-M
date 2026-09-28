@@ -69,6 +69,7 @@ export function AdminLeadsClient({
   const [parseError, setParseError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   // Toast
   const [toast, setToast] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -343,6 +344,7 @@ export function AdminLeadsClient({
     setIsParsing(true);
     setParseError(null);
     setParseResult(null);
+    setImportError(null);
 
     try {
       const result = await parseLeadsFile(file);
@@ -364,6 +366,7 @@ export function AdminLeadsClient({
     if (!parseResult || parseResult.validRows.length === 0) return;
 
     setIsImporting(true);
+    setImportError(null);
     const validRows = parseResult.validRows;
     const batchSize = 100;
     const insertedLeads: AdminLeadWithDetails[] = [];
@@ -400,7 +403,9 @@ export function AdminLeadsClient({
         showToast(summary, 'success');
         setShowImportModal(false);
         setParseResult(null);
+        setImportError(null);
       } catch (err: any) {
+        setImportError(err?.message || 'Failed to upload leads');
         showToast(`Import failed: ${err?.message || 'Error inserting into database'}`, 'error');
       }
     } else {
@@ -429,6 +434,7 @@ export function AdminLeadsClient({
       showToast(summary, 'success');
       setShowImportModal(false);
       setParseResult(null);
+      setImportError(null);
     }
 
     setIsImporting(false);
@@ -440,7 +446,7 @@ export function AdminLeadsClient({
     setShowImportModal(false);
     setParseResult(null);
     setParseError(null);
-    setImportProgress(null);
+    setImportError(null);
   };
 
   return (
@@ -1014,6 +1020,39 @@ export function AdminLeadsClient({
                           width: `${Math.round((importProgress.current / importProgress.total) * 100)}%`,
                         }}
                       />
+                    </div>
+                  </div>
+                )}
+
+                {/* RLS Error Notice inside Modal */}
+                {importError && (
+                  <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-xs text-rose-900 dark:text-rose-200 space-y-2">
+                    <div className="flex items-center gap-2 font-bold text-rose-700 dark:text-rose-300">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>Database RLS Permission Required</span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed">
+                      Your Supabase database has Row Level Security (RLS) enabled on the <code className="px-1 py-0.5 rounded bg-rose-100 dark:bg-rose-900/60 font-mono">leads</code> table. Run the SQL script in your Supabase SQL Editor to allow uploads.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <a
+                        href="https://supabase.com/dashboard/project/pqfkmvtcdyytfjafgber/sql/new"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-semibold text-[11px] inline-flex items-center gap-1 transition shadow-xs"
+                      >
+                        Open Supabase SQL Editor <ExternalLink className="w-3 h-3" />
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText("ALTER TABLE leads DISABLE ROW LEVEL SECURITY;\nALTER TABLE freelancers DISABLE ROW LEVEL SECURITY;\nALTER TABLE freelancers ALTER COLUMN commission_rate TYPE numeric(5,2);");
+                          showToast("Copied SQL fix to clipboard!");
+                        }}
+                        className="px-3 py-1.5 bg-white dark:bg-zinc-800 border border-rose-300 dark:border-rose-700 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-lg font-semibold text-[11px] transition cursor-pointer"
+                      >
+                        Copy SQL Fix
+                      </button>
                     </div>
                   </div>
                 )}
