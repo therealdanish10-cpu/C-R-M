@@ -13,6 +13,7 @@ import {
   Square,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   ExternalLink,
   Phone,
   Building2,
@@ -22,8 +23,10 @@ import {
   FileSpreadsheet,
   X,
   Loader2,
+  Trash2,
 } from 'lucide-react';
 import { parseLeadsFile, ParseResult } from '@/lib/utils/lead-parser';
+import { getAdminLeadsData } from '@/lib/supabase/admin-queries';
 
 interface AdminLeadsClientProps {
   initialLeads: AdminLeadWithDetails[];
@@ -45,6 +48,16 @@ export function AdminLeadsClient({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkAssignTo, setBulkAssignTo] = useState<string>('');
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+
+  // Deletion state
+  const [deletingSelection, setDeletingSelection] = useState<{
+    ids: string[];
+    isSingle: boolean;
+    leadTitle?: string;
+  } | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteProgress, setDeleteProgress] = useState<{ current: number; total: number } | null>(null);
 
   // Single row update loading
   const [updatingLeadId, setUpdatingLeadId] = useState<string | null>(null);
@@ -105,6 +118,10 @@ export function AdminLeadsClient({
     });
   }, [leads, statusFilter, freelancerFilter, searchTerm]);
 
+  // Check if every lead matching current filters/search is selected
+  const isAllFilteredSelected =
+    filteredLeads.length > 0 && filteredLeads.every((lead) => selectedIds.has(lead.id));
+
   // Toggle single selection
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
@@ -115,12 +132,22 @@ export function AdminLeadsClient({
     });
   };
 
-  // Select all filtered leads
+  // Select all leads matching current filters/search
   const toggleSelectAll = () => {
-    if (selectedIds.size === filteredLeads.length && filteredLeads.length > 0) {
-      setSelectedIds(new Set());
+    if (isAllFilteredSelected) {
+      // Deselect all filtered leads
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        filteredLeads.forEach((l) => next.delete(l.id));
+        return next;
+      });
     } else {
-      setSelectedIds(new Set(filteredLeads.map((l) => l.id)));
+      // Select every lead matching current filters/search
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        filteredLeads.forEach((l) => next.add(l.id));
+        return next;
+      });
     }
   };
 
@@ -215,6 +242,134 @@ export function AdminLeadsClient({
     }
 
     setIsBulkUpdating(false);
+  };
+
+  // Delete Action Handlers
+  const handleOpenSingleDelete = (lead: AdminLeadWithDetails) => {
+    setDeletingSelection({
+      ids: [lead.id],
+      isSingle: true,
+      leadTitle: lead.business_name || 'Selected Lead',
+    });
+    setDeleteConfirmText('');
+  };
+
+  const handleOpenBulkDelete = () => {
+    if (selectedIds.size === 0) return;
+    setDeletingSelection({
+      ids: Array.from(selectedIds),
+      isSingle: false,
+    });
+    setDeleteConfirmText('');
+  };
+
+  const handleCloseDeleteModal = () => {
+    if (isDeleting) return;
+    setDeletingSelection(null);
+    setDeleteConfirmText('');
+    setDeleteProgress(null);
+  };
+
+  const handleExecuteDelete = async () => {
+    if (!deletingSelection || deletingSelection.ids.length === 0) return;
+
+    const idsToDelete = [...deletingSelection.ids];
+    const totalCount = idsToDelete.length;
+    const batchSize = 100;
+
+    setIsDeleting(true);
+
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+
+        for (let i = 0; i < idsToDelete.length; i += batchSize) {
+          const batch = idsToDelete.slice(i, i + batchSize);
+
+          // 1. Delete linked sales records
+          const { error: salesErr } = await supabase
+            .from('sales')
+            .delete()
+            .in('lead_id', batch);
+          if (salesErr) {
+            console.error('Error deleting linked sales records:', salesErr);
+          }
+
+          // 2. Delete linked meetings
+          const { error: meetingsErr } = await supabase
+            .from('meetings')
+            .delete()
+            .in('lead_id', batch);
+          if (meetingsErr) {
+            console.error('Error deleting linked meetings:', meetingsErr);
+          }
+
+          // 3. Delete linked calls
+          const { error: callsErr } = await supabase
+            .from('calls')
+            .delete()
+            .in('lead_id', batch);
+          if (callsErr) {
+            console.error('Error deleting linked calls:', callsErr);
+          }
+
+          // 4. Delete leads
+          const { error: leadsErr } = await supabase
+            .from('leads')
+            .delete()
+            .in('id', batch);
+
+          if (leadsErr) {
+            throw leadsErr;
+          }
+
+          setDeleteProgress({
+            current: Math.min(i + batchSize, totalCount),
+            total: totalCount,
+          });
+        }
+
+        // Optimistically update local leads state and selected IDs
+        const deletedSet = new Set(idsToDelete);
+        setLeads((prev) => prev.filter((l) => !deletedSet.has(l.id)));
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          idsToDelete.forEach((id) => next.delete(id));
+          return next;
+        });
+
+        // Re-fetch fresh leads data from Supabase to guarantee complete sync
+        try {
+          const freshData = await getAdminLeadsData(supabase);
+          setLeads(freshData.leads);
+        } catch (fetchErr) {
+          console.warn('Could not re-fetch leads after deletion, local state updated:', fetchErr);
+        }
+
+        showToast(`${totalCount} lead${totalCount === 1 ? '' : 's'} deleted`, 'success');
+        setDeletingSelection(null);
+        setDeleteConfirmText('');
+      } catch (err: any) {
+        console.error('Error deleting leads:', err);
+        showToast(`Failed to delete leads: ${err?.message || 'Database error'}`, 'error');
+      }
+    } else {
+      // Demo Mode
+      const deletedSet = new Set(idsToDelete);
+      setLeads((prev) => prev.filter((l) => !deletedSet.has(l.id)));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        idsToDelete.forEach((id) => next.delete(id));
+        return next;
+      });
+
+      showToast(`[Demo Mode] ${totalCount} lead${totalCount === 1 ? '' : 's'} deleted`, 'success');
+      setDeletingSelection(null);
+      setDeleteConfirmText('');
+    }
+
+    setIsDeleting(false);
+    setDeleteProgress(null);
   };
 
   // Bulk Import Handlers
@@ -440,40 +595,69 @@ export function AdminLeadsClient({
           </div>
 
           {/* Leads Count */}
-          <div className="flex items-center justify-end text-xs font-semibold text-zinc-500">
-            Showing {filteredLeads.length} of {leads.length} leads
+          <div className="flex items-center justify-end text-xs font-semibold text-zinc-500 gap-2">
+            {selectedIds.size > 0 && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                {selectedIds.size} lead{selectedIds.size === 1 ? '' : 's'} selected
+              </span>
+            )}
+            <span>Showing {filteredLeads.length} of {leads.length} leads</span>
           </div>
         </div>
 
-        {/* Bulk Assignment Bar */}
+        {/* Bulk Actions Bar */}
         {selectedIds.size > 0 && (
-          <div className="p-3.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+          <div className="p-3.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 flex flex-col md:flex-row md:items-center justify-between gap-3 animate-in fade-in">
             <div className="flex items-center gap-2 text-xs font-bold text-blue-900 dark:text-blue-200">
-              <UserCheck className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+              <UserCheck className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
               <span>{selectedIds.size} lead{selectedIds.size === 1 ? '' : 's'} selected</span>
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="ml-2 text-[11px] font-normal text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                Clear selection
+              </button>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-600 dark:text-zinc-400 hidden sm:inline">Assign selected to:</span>
-              <select
-                value={bulkAssignTo}
-                onChange={(e) => setBulkAssignTo(e.target.value)}
-                className="px-3 py-1.5 text-xs bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg font-medium"
-              >
-                <option value="">Select Freelancer</option>
-                {freelancers.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-600 dark:text-zinc-400 hidden sm:inline">Assign selected to:</span>
+                <select
+                  value={bulkAssignTo}
+                  onChange={(e) => setBulkAssignTo(e.target.value)}
+                  disabled={isBulkUpdating || isDeleting}
+                  className="px-3 py-1.5 text-xs bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-lg font-medium text-zinc-900 dark:text-zinc-100 disabled:opacity-50"
+                >
+                  <option value="">Select Freelancer</option>
+                  {freelancers.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
 
+                <button
+                  type="button"
+                  onClick={handleBulkAssign}
+                  disabled={isBulkUpdating || isDeleting || !bulkAssignTo}
+                  className="px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition disabled:opacity-50 shadow-xs"
+                >
+                  {isBulkUpdating ? 'Assigning...' : 'Apply Bulk'}
+                </button>
+              </div>
+
+              <div className="h-4 w-px bg-blue-200 dark:bg-blue-800 hidden md:block" />
+
+              {/* Red Delete Selected Button */}
               <button
-                onClick={handleBulkAssign}
-                disabled={isBulkUpdating || !bulkAssignTo}
-                className="px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition disabled:opacity-50 shadow-xs"
+                type="button"
+                onClick={handleOpenBulkDelete}
+                disabled={isBulkUpdating || isDeleting}
+                className="inline-flex items-center px-3.5 py-1.5 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white rounded-lg transition disabled:opacity-50 shadow-xs"
               >
-                {isBulkUpdating ? 'Assigning...' : 'Apply Bulk'}
+                <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                <span>Delete selected</span>
               </button>
             </div>
           </div>
@@ -486,18 +670,31 @@ export function AdminLeadsClient({
           <table className="w-full text-left text-sm border-collapse">
             <thead>
               <tr className="border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider select-none">
-                <th className="py-3 px-4 w-10">
-                  <button
-                    onClick={toggleSelectAll}
-                    className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 flex items-center"
-                    title="Select / Deselect All"
-                  >
-                    {selectedIds.size > 0 && selectedIds.size === filteredLeads.length ? (
-                      <CheckSquare className="w-4 h-4 text-blue-600" />
-                    ) : (
-                      <Square className="w-4 h-4" />
+                <th className="py-3 px-4 w-12">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={toggleSelectAll}
+                      className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 flex items-center transition"
+                      title={isAllFilteredSelected ? 'Deselect all' : 'Select all matching filters/search'}
+                      aria-label="Select all matching filters"
+                    >
+                      {isAllFilteredSelected ? (
+                        <CheckSquare className="w-4 h-4 text-blue-600" />
+                      ) : selectedIds.size > 0 ? (
+                        <div className="w-4 h-4 rounded border border-blue-600 bg-blue-50 dark:bg-blue-950 flex items-center justify-center">
+                          <div className="w-2 h-0.5 bg-blue-600 rounded-sm" />
+                        </div>
+                      ) : (
+                        <Square className="w-4 h-4" />
+                      )}
+                    </button>
+                    {selectedIds.size > 0 && (
+                      <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 normal-case tracking-normal whitespace-nowrap">
+                        {selectedIds.size} selected
+                      </span>
                     )}
-                  </button>
+                  </div>
                 </th>
                 <th className="py-3.5 px-4">Business Name</th>
                 <th className="py-3.5 px-4">Phone</th>
@@ -612,13 +809,26 @@ export function AdminLeadsClient({
 
                       {/* Actions */}
                       <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                        <Link
-                          href={`/leads/${lead.id}`}
-                          className="inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-md bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 transition"
-                        >
-                          <span>View</span>
-                          <ExternalLink className="w-3 h-3 ml-1 opacity-70" />
-                        </Link>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Link
+                            href={`/leads/${lead.id}`}
+                            className="inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-md bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 transition"
+                            title="View lead details"
+                          >
+                            <span>View</span>
+                            <ExternalLink className="w-3 h-3 ml-1 opacity-70" />
+                          </Link>
+
+                          <button
+                            type="button"
+                            onClick={() => handleOpenSingleDelete(lead)}
+                            disabled={isDeleting || isBulkUpdating}
+                            className="p-1.5 rounded-md text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition disabled:opacity-40"
+                            title={`Delete ${lead.business_name}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -909,6 +1119,158 @@ export function AdminLeadsClient({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DELETE LEADS CONFIRMATION */}
+      {deletingSelection && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-md w-full p-6 shadow-2xl border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95 my-8">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between pb-3.5 border-b border-zinc-100 dark:border-zinc-800 mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800/60 flex items-center justify-center text-rose-600 dark:text-rose-400 shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
+                    {deletingSelection.isSingle
+                      ? 'Delete Lead?'
+                      : `Delete ${deletingSelection.ids.length} Leads?`}
+                  </h3>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                    This action cannot be undone.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseDeleteModal}
+                disabled={isDeleting}
+                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 p-1 rounded-lg disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Lead Count Statement */}
+              <p className="text-xs sm:text-sm text-zinc-700 dark:text-zinc-300">
+                {deletingSelection.isSingle ? (
+                  <>
+                    Are you sure you want to permanently delete{' '}
+                    <strong className="text-zinc-900 dark:text-zinc-100 font-semibold">
+                      {deletingSelection.leadTitle || 'this lead'}
+                    </strong>
+                    ? This lead will be permanently removed from the system.
+                  </>
+                ) : (
+                  <>
+                    Are you sure you want to permanently delete{' '}
+                    <strong className="text-zinc-900 dark:text-zinc-100 font-semibold">
+                      {deletingSelection.ids.length} leads
+                    </strong>
+                    ? These leads will be permanently removed from the system.
+                  </>
+                )}
+              </p>
+
+              {/* Linked Records Warning */}
+              <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-xs text-rose-800 dark:text-rose-300 space-y-1.5">
+                <div className="font-bold flex items-center gap-1.5 text-rose-900 dark:text-rose-200">
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                  <span>Permanent Deletion Warning</span>
+                </div>
+                <p className="leading-relaxed">
+                  All linked <strong>call logs</strong>, <strong>meetings</strong>, and <strong>sales records</strong> associated with {deletingSelection.isSingle ? 'this lead' : 'these leads'} will also be permanently deleted.
+                </p>
+              </div>
+
+              {/* Confirmation input: require typing DELETE if > 10 leads */}
+              {deletingSelection.ids.length > 10 && (
+                <div className="space-y-1.5 pt-1">
+                  <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    To confirm deletion of {deletingSelection.ids.length} leads, type{' '}
+                    <span className="font-mono font-bold text-rose-600 dark:text-rose-400 select-all">
+                      DELETE
+                    </span>{' '}
+                    below:
+                  </label>
+                  <input
+                    type="text"
+                    value={deleteConfirmText}
+                    onChange={(e) => setDeleteConfirmText(e.target.value)}
+                    placeholder="Type DELETE to confirm"
+                    disabled={isDeleting}
+                    className="w-full px-3 py-2 text-xs bg-zinc-50 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg font-mono tracking-wider text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-hidden focus:ring-2 focus:ring-rose-500"
+                    autoFocus
+                  />
+                  {deleteConfirmText.length > 0 && deleteConfirmText.trim() !== 'DELETE' && (
+                    <p className="text-[11px] text-rose-500 font-medium">
+                      Type &quot;DELETE&quot; in uppercase to enable confirmation.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Progress bar during batch deletion */}
+              {isDeleting && deleteProgress && (
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex justify-between text-xs font-semibold text-zinc-600 dark:text-zinc-400">
+                    <span>Deleting records from database...</span>
+                    <span>
+                      {deleteProgress.current} / {deleteProgress.total}
+                    </span>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                    <div
+                      className="h-full bg-rose-600 transition-all duration-300 rounded-full"
+                      style={{
+                        width: `${Math.round((deleteProgress.current / deleteProgress.total) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Modal Action Buttons */}
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={handleCloseDeleteModal}
+                  disabled={isDeleting}
+                  className="px-4 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExecuteDelete}
+                  disabled={
+                    (deletingSelection.ids.length > 10 && deleteConfirmText.trim() !== 'DELETE') ||
+                    isDeleting
+                  }
+                  className="inline-flex items-center justify-center px-4 py-2 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed shadow-xs"
+                >
+                  {isDeleting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                      <span>
+                        {deletingSelection.isSingle
+                          ? 'Delete Lead'
+                          : `Delete ${deletingSelection.ids.length} Leads`}
+                      </span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
