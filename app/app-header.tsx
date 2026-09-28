@@ -47,6 +47,17 @@ export function AppHeader() {
           return;
         }
 
+        const userEmail = (user.email || '').toLowerCase().trim();
+        if (userEmail === 'therealdanish12@gmail.com') {
+          if (isMounted) {
+            setIsAdmin(true);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('trelio_is_admin', 'true');
+            }
+          }
+          return;
+        }
+
         let { data: freelancer, error } = await supabase
           .from('freelancers')
           .select('id, name, email, is_admin')
@@ -87,6 +98,17 @@ export function AppHeader() {
       const supabase = createClient();
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         if (session?.user) {
+          const sessionEmail = (session.user.email || '').toLowerCase().trim();
+          if (sessionEmail === 'therealdanish12@gmail.com') {
+            if (isMounted) {
+              setIsAdmin(true);
+              if (typeof window !== 'undefined') {
+                localStorage.setItem('trelio_is_admin', 'true');
+              }
+            }
+            return;
+          }
+
           let { data: freelancer } = await supabase
             .from('freelancers')
             .select('id, name, email, is_admin')

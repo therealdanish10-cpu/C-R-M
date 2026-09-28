@@ -1,5 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { Lead, DashboardStats, Freelancer, MeetingWithLead } from './types';
+import { isExplicitAdminEmail } from './admin-queries';
 
 export async function getFreelancerProfile(supabase: SupabaseClient) {
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -8,6 +9,9 @@ export async function getFreelancerProfile(supabase: SupabaseClient) {
     return { user: null, freelancer: null, error: authError?.message || 'Not authenticated' };
   }
 
+  const userEmail = (user.email || '').trim().toLowerCase();
+  const isExplicitAdmin = isExplicitAdminEmail(userEmail);
+
   let { data: freelancer, error: freelancerError } = await supabase
     .from('freelancers')
     .select('*')
@@ -15,11 +19,11 @@ export async function getFreelancerProfile(supabase: SupabaseClient) {
     .maybeSingle();
 
   // Fallback by email if not linked by user_id
-  if (!freelancer && user.email) {
+  if (!freelancer && userEmail) {
     const { data: byEmail } = await supabase
       .from('freelancers')
       .select('*')
-      .ilike('email', user.email)
+      .ilike('email', userEmail)
       .maybeSingle();
 
     if (byEmail) {
@@ -32,11 +36,61 @@ export async function getFreelancerProfile(supabase: SupabaseClient) {
     }
   }
 
+  // Handle explicit admin (therealdanish12@gmail.com)
+  if (isExplicitAdmin) {
+    if (!freelancer) {
+      const newAdminPayload = {
+        user_id: user.id,
+        name: user.user_metadata?.full_name || user.user_metadata?.name || 'Danish (Admin)',
+        email: user.email!,
+        country: 'Pakistan',
+        timezone: 'Asia/Karachi',
+        status: 'active',
+        commission_rate: 15.0,
+        is_admin: true,
+      };
+
+      try {
+        const { data: created } = await supabase
+          .from('freelancers')
+          .insert(newAdminPayload)
+          .select()
+          .maybeSingle();
+
+        if (created) {
+          freelancer = created;
+        }
+      } catch (insertErr) {
+        console.error('Error auto-creating admin profile:', insertErr);
+      }
+
+      if (!freelancer) {
+        freelancer = {
+          id: user.id,
+          ...newAdminPayload,
+          created_at: new Date().toISOString(),
+        } as Freelancer;
+      }
+    } else {
+      freelancer.is_admin = true;
+      try {
+        await supabase
+          .from('freelancers')
+          .update({ is_admin: true, user_id: user.id })
+          .eq('id', freelancer.id);
+      } catch (updateErr) {
+        console.error('Error updating admin profile in DB:', updateErr);
+      }
+    }
+
+    return { user, freelancer: freelancer as Freelancer, error: null };
+  }
+
   if (freelancerError && !freelancer) {
     return { user, freelancer: null, error: freelancerError.message };
   }
 
-  if (freelancer) {
+  if (freelancer && !isExplicitAdmin) {
     // If user is edoxe, guarantee freelancer status (is_admin = false)
     const nameLower = (freelancer.name || '').toLowerCase();
     const emailLower = (freelancer.email || '').toLowerCase();

@@ -31,59 +31,127 @@ export type AdminMeetingWithDetails = MeetingWithLead & {
   freelancerName?: string;
 };
 
+export const ADMIN_EMAILS = ['therealdanish12@gmail.com'];
+
+export function isExplicitAdminEmail(email?: string | null): boolean {
+  if (!email) return false;
+  return ADMIN_EMAILS.some((adm) => adm.toLowerCase() === email.trim().toLowerCase());
+}
+
 // Check if currently authenticated user is an admin
 export async function checkIsAdmin(supabase: SupabaseClient): Promise<{
   isAdmin: boolean;
   freelancer: Freelancer | null;
 }> {
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) {
-    return { isAdmin: false, freelancer: null };
-  }
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      return { isAdmin: false, freelancer: null };
+    }
 
-  let { data: freelancer } = await supabase
-    .from('freelancers')
-    .select('*')
-    .eq('user_id', user.id)
-    .maybeSingle();
+    const userEmail = (user.email || '').trim().toLowerCase();
+    const isExplicitAdmin = isExplicitAdminEmail(userEmail);
 
-  if (!freelancer && user.email) {
-    const { data: byEmail } = await supabase
+    let { data: freelancer } = await supabase
       .from('freelancers')
       .select('*')
-      .ilike('email', user.email)
+      .eq('user_id', user.id)
       .maybeSingle();
 
-    if (byEmail) {
-      freelancer = byEmail;
-      await supabase
+    if (!freelancer && userEmail) {
+      const { data: byEmail } = await supabase
         .from('freelancers')
-        .update({ user_id: user.id })
-        .eq('id', byEmail.id);
-    }
-  }
+        .select('*')
+        .ilike('email', userEmail)
+        .maybeSingle();
 
-  if (!freelancer) {
+      if (byEmail) {
+        freelancer = byEmail;
+        await supabase
+          .from('freelancers')
+          .update({ user_id: user.id })
+          .eq('id', byEmail.id);
+      }
+    }
+
+    // Explicit Admin handling (therealdanish12@gmail.com is ALWAYS admin)
+    if (isExplicitAdmin) {
+      if (!freelancer) {
+        const newAdminPayload = {
+          user_id: user.id,
+          name: user.user_metadata?.full_name || user.user_metadata?.name || 'Danish (Admin)',
+          email: user.email!,
+          status: 'active',
+          commission_rate: 15.0,
+          is_admin: true,
+        };
+
+        try {
+          const { data: created } = await supabase
+            .from('freelancers')
+            .insert(newAdminPayload)
+            .select()
+            .maybeSingle();
+
+          if (created) {
+            freelancer = created;
+          }
+        } catch (insertErr) {
+          console.error('Error auto-creating admin freelancer profile:', insertErr);
+        }
+
+        if (!freelancer) {
+          freelancer = {
+            id: user.id,
+            ...newAdminPayload,
+            created_at: new Date().toISOString(),
+          } as Freelancer;
+        }
+      } else {
+        freelancer.is_admin = true;
+        try {
+          await supabase
+            .from('freelancers')
+            .update({ is_admin: true, user_id: user.id })
+            .eq('id', freelancer.id);
+        } catch (updateErr) {
+          console.error('Error syncing admin rights in DB:', updateErr);
+        }
+      }
+
+      return {
+        isAdmin: true,
+        freelancer: freelancer as Freelancer,
+      };
+    }
+
+    if (!freelancer) {
+      return { isAdmin: false, freelancer: null };
+    }
+
+    // For other users: if named or emailed edoxe, guarantee freelancer status (is_admin = false)
+    const nameLower = (freelancer.name || '').toLowerCase();
+    const emailLower = (freelancer.email || '').toLowerCase();
+    if (nameLower.includes('edoxe') || emailLower.includes('edoxe')) {
+      if (freelancer.is_admin) {
+        try {
+          await supabase
+            .from('freelancers')
+            .update({ is_admin: false })
+            .eq('id', freelancer.id);
+        } catch (e) {}
+        freelancer.is_admin = false;
+      }
+    }
+
+    return {
+      isAdmin: Boolean(freelancer.is_admin),
+      freelancer: freelancer as Freelancer,
+    };
+  } catch (err) {
+    console.error('Error in checkIsAdmin:', err);
     return { isAdmin: false, freelancer: null };
   }
-
-  // If edoxe, guarantee freelancer status (is_admin = false)
-  const nameLower = (freelancer.name || '').toLowerCase();
-  const emailLower = (freelancer.email || '').toLowerCase();
-  if (nameLower.includes('edoxe') || emailLower.includes('edoxe')) {
-    if (freelancer.is_admin) {
-      await supabase
-        .from('freelancers')
-        .update({ is_admin: false })
-        .eq('id', freelancer.id);
-      freelancer.is_admin = false;
-    }
-  }
-
-  return {
-    isAdmin: Boolean(freelancer.is_admin),
-    freelancer: freelancer as Freelancer,
-  };
 }
 
 // 1. Overview Page Data
@@ -191,19 +259,40 @@ export async function getAdminLeadsData(supabase: SupabaseClient): Promise<{
 
 // 3. Admin Freelancers Data
 export async function getAdminFreelancersData(supabase: SupabaseClient): Promise<Freelancer[]> {
-  // Enforce edoxe is freelancer if present
+  // Enforce edoxe is freelancer if present, BUT exclude Danish
   try {
     await supabase
       .from('freelancers')
       .update({ is_admin: false })
+      .neq('email', 'therealdanish12@gmail.com')
       .or('name.ilike.%edoxe%,email.ilike.%edoxe%')
       .eq('is_admin', true);
   } catch (e) {
     // Non-blocking
   }
 
+  // Enforce therealdanish12@gmail.com is admin in database
+  try {
+    await supabase
+      .from('freelancers')
+      .update({ is_admin: true })
+      .ilike('email', 'therealdanish12@gmail.com');
+  } catch (e) {
+    // Non-blocking
+  }
+
   const { data } = await supabase.from('freelancers').select('*').order('created_at', { ascending: false });
-  return (data || []) as Freelancer[];
+  let list = (data || []) as Freelancer[];
+
+  // Guarantee Danish is marked as admin in returned data
+  list = list.map((fl) => {
+    if (isExplicitAdminEmail(fl.email)) {
+      return { ...fl, is_admin: true };
+    }
+    return fl;
+  });
+
+  return list;
 }
 
 // 4. Admin Sales Data

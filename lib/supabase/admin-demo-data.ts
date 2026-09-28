@@ -9,6 +9,19 @@ import {
 
 export const DEMO_FREELANCERS: Freelancer[] = [
   {
+    id: 'fl-danish',
+    user_id: 'usr-danish',
+    name: 'Danish (Admin)',
+    email: 'therealdanish12@gmail.com',
+    phone: '+1 (555) 000-1234',
+    country: 'Pakistan',
+    timezone: 'Asia/Karachi',
+    status: 'active',
+    commission_rate: 15.0,
+    is_admin: true,
+    created_at: '2026-01-01T00:00:00Z',
+  },
+  {
     id: 'fl-101',
     user_id: 'usr-101',
     name: 'Sarah Connor',

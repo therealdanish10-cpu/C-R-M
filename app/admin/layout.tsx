@@ -1,7 +1,7 @@
 import React from 'react';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
-import { checkIsAdmin } from '@/lib/supabase/admin-queries';
+import { checkIsAdmin, isExplicitAdminEmail } from '@/lib/supabase/admin-queries';
 import { AdminNav } from './admin-nav';
 
 export const dynamic = 'force-dynamic';
@@ -34,6 +34,21 @@ export default async function AdminLayout({
     } catch (err: any) {
       if (err?.message === 'NEXT_REDIRECT') throw err;
       console.error('Error verifying admin authorization:', err);
+
+      // Fail-safe check: if authenticated user is Danish, permit admin access
+      try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user && isExplicitAdminEmail(user.email)) {
+          return (
+            <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+              <AdminNav />
+              <main>{children}</main>
+            </div>
+          );
+        }
+      } catch {}
+
       redirect('/dashboard');
     }
   }
